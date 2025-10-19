@@ -308,14 +308,3 @@ for i in range(len(params1)):
         context1 = params1[i].parent.text.decode("utf8")
         print(f"  PARAM {i + 1} → NO MATCH")
         print(f"    Context 1: {context1}")
-
-print("\n" + "=" * 60)
-print("INTERPRETATION:")
-print("=" * 60)
-print("""
-- PARAM 1 (b * PARAM) → PARAM 1 (b * PARAM): ✓ Same variable 'b'
-- PARAM 2 (c * PARAM) → NO MATCH: ✗ Different variable ('c' vs 'd')
-- PARAM 3 (first in PARAM + PARAM) → PARAM 3 (same position)
-- PARAM 4 (second in PARAM + PARAM) → PARAM 4 (same position)
-- PARAM 5 (return PARAM) → PARAM 5 (return PARAM): ✓ Same context
-""")
