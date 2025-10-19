@@ -1,6 +1,6 @@
 """
-Step 2: Finding Specific Nodes
-This script demonstrates how to find all PARAMs in C++ code
+Step 3: Full PARAM Matching Algorithm
+Matches PARAMs between two code snippets using growing subtrees
 """
 
 from tree_sitter import Language, Parser, Query
@@ -10,150 +10,276 @@ import tree_sitter_cpp as tscpp
 CPP_LANGUAGE = Language(tscpp.language())
 parser = Parser(CPP_LANGUAGE)
 
-# C++ code with PARAM placeholders (simulating anonymized parameters)
-cpp_code = """
+# Two code snippets with anonymized parameters
+cpp_snippet_1 = """
 int main() {
-    int x = PARAM * PARAM;
-    float y = x + PARAM;
-    int z = PARAM;
+    int a = b * PARAM;
+    int x = c * PARAM;
+    float y = PARAM + PARAM;
     return PARAM;
 }
 """
 
-print("Parsing this C++ code:")
-print("="*50)
-print(cpp_code)
-print("="*50)
-
-# Parse the code
-tree = parser.parse(bytes(cpp_code, "utf8"))
-root_node = tree.root_node
-
-print("\n" + "="*50)
-print("METHOD 1: Manual traversal to find PARAMs")
-print("="*50)
-
-def find_params_manual(node, params_list):
-    """Recursively find all PARAM nodes"""
-    # Check if this node's text is "PARAM"
-    if node.text and node.text.decode('utf8') == 'PARAM':
-        params_list.append(node)
-
-    # Recurse into children
-    for child in node.children:
-        find_params_manual(child, params_list)
-
-params_manual = []
-find_params_manual(root_node, params_manual)
-
-print(f"\nFound {len(params_manual)} PARAMs using manual traversal:")
-for i, param in enumerate(params_manual):
-    print(f"\n  PARAM #{i+1}:")
-    print(f"    Type: {param.type}")
-    print(f"    Text: {param.text.decode('utf8')}")
-    print(f"    Position: line {param.start_point[0] + 1}, column {param.start_point[1]}")
-    print(f"    Parent type: {param.parent.type if param.parent else 'None'}")
-
-print("\n" + "="*50)
-print("METHOD 2: Using tree-sitter queries")
-print("="*50)
-
-# Create a query to find identifiers
-# In tree-sitter, PARAM will be parsed as an identifier
-query_string = """
-(identifier) @param
+cpp_snippet_2 = """
+int main() {
+    int a = b * PARAM;
+    int x = d * PARAM;
+    float y = PARAM + PARAM;
+    return PARAM;
+}
 """
 
-print(f"Query pattern: {query_string.strip()}")
+print("="*60)
+print("CODE SNIPPET 1:")
+print("="*60)
+print(cpp_snippet_1)
 
-# Compile the query
-query = Query(CPP_LANGUAGE, query_string)
+print("="*60)
+print("CODE SNIPPET 2:")
+print("="*60)
+print(cpp_snippet_2)
 
-# Execute the query
-captures = query.captures(root_node)
+# Parse both snippets
+tree1 = parser.parse(bytes(cpp_snippet_1, "utf8"))
+tree2 = parser.parse(bytes(cpp_snippet_2, "utf8"))
 
-print(f"\nFound {len(captures)} identifier captures")
+print("="*60)
+print("STEP 1: Find all PARAMs in both snippets")
+print("="*60)
 
-# Filter to only actual PARAMs
-params_query = []
+def find_params(root):
+    """Find all PARAM nodes using a query"""
+    query_string = "(identifier) @param"
+    query = Query(CPP_LANGUAGE, query_string)
+    captures = query.captures(root)
 
-for capture_name, nodes in captures.items():
-    print(f"Capture: {capture_name}")
-    for node in nodes:
-        if node.text.decode('utf8') == 'PARAM':
-            params_query.append(node)
+    params = []
+    for capture_name, nodes in captures.items():
+        for node in nodes:
+            if node.text.decode('utf8') == 'PARAM':
+                params.append(node)
+    return params
 
-print(f"Filtered to {len(params_query)} actual PARAMs:")
-for i, param in enumerate(params_query):
-    print(f"\n  PARAM #{i+1}:")
-    print(f"    Capture name: @param")
-    print(f"    Type: {param.type}")
-    print(f"    Text: {param.text.decode('utf8')}")
+params1 = find_params(tree1.root_node)
+params2 = find_params(tree2.root_node)
 
-print("\n" + "="*50)
-print("METHOD 3: Understanding node context")
-print("="*50)
+print(f"\nSnippet 1: Found {len(params1)} PARAMs")
+for i, param in enumerate(params1):
+    context = param.parent.text.decode('utf8') if param.parent else "?"
+    print(f"  PARAM {i+1}: line {param.start_point[0]+1}, context: {context}")
 
-# Let's look at the context around each PARAM
-for i, param in enumerate(params_manual):
-    print(f"\nPARAM #{i+1} context:")
-    print(f"  Node type: {param.type}")
+print(f"\nSnippet 2: Found {len(params2)} PARAMs")
+for i, param in enumerate(params2):
+    context = param.parent.text.decode('utf8') if param.parent else "?"
+    print(f"  PARAM {i+1}: line {param.start_point[0]+1}, context: {context}")
 
-    # Look at parent
-    if param.parent:
-        print(f"  Parent type: {param.parent.type}")
-        print(f"  Parent text: {param.parent.text.decode('utf8')}")
+print("\n" + "="*60)
+print("STEP 2: Define node comparison function")
+print("="*60)
 
-    # Look at grandparent
-    if param.parent and param.parent.parent:
-        print(f"  Grandparent type: {param.parent.parent.type}")
+def nodes_equal(node1, node2, mask_params=True):
+    """
+    Recursively compare two nodes for structural and textual equality
+    """
+    # Check if types match
+    if node1.type != node2.type:
+        return False
 
-    # Look at siblings
-    if param.parent:
-        siblings = param.parent.children
-        param_index = siblings.index(param)
-        print(f"  Position among siblings: {param_index} of {len(siblings)}")
+    # Check if named status matches
+    if node1.is_named != node2.is_named:
+        return False
 
-        print(f"  Siblings:")
-        for j, sibling in enumerate(siblings):
-            marker = " <-- THIS PARAM" if sibling == param else ""
-            sib_text = sibling.text.decode('utf8').replace('\n', ' ')[:30]
-            print(f"    [{j}] {sibling.type}: \"{sib_text}\"{marker}")
+    # For leaf nodes, compare text
+    if node1.child_count == 0 and node2.child_count == 0:
+        text1 = node1.text.decode('utf8') if node1.text else ""
+        text2 = node2.text.decode('utf8') if node2.text else ""
 
-print("\n" + "="*50)
-print("METHOD 4: Getting context subtrees")
-print("="*50)
+        # If masking PARAMs, treat all PARAMs as equal
+        if mask_params and text1 == 'PARAM' and text2 == 'PARAM':
+            return True
 
-# For each PARAM, show progressively larger contexts
-param = params_manual[0]  # Let's focus on the first PARAM: "PARAM * PARAM"
+        # For identifiers and literals, text must match
+        if node1.type in ['identifier', 'number_literal', 'string_literal',
+                          'primitive_type', 'type_identifier']:
+            return text1 == text2
 
-print(f"Analyzing first PARAM: {param.text.decode('utf8')}")
-print(f"Position: line {param.start_point[0] + 1}, column {param.start_point[1]}")
+        # For other leaf nodes (operators, keywords), type match is enough
+        # or exact text match for anonymous nodes
+        if not node1.is_named:  # anonymous nodes like operators
+            return text1 == text2
 
-# Show growing context
-current = param
-level = 0
-while current and level < 5:
-    print(f"\nContext level {level} ({current.type}):")
-    print(f"  Text: {current.text.decode('utf8')}")
-    print(f"  S-expression:")
-    # Show indented S-expression
-    sexp_lines = str(current).split('\n')
-    for line in sexp_lines[:10]:  # Limit lines for readability
-        print(f"    {line}")
-    if len(sexp_lines) > 10:
-        print(f"    ... ({len(sexp_lines) - 10} more lines)")
+        return True
 
-    current = current.parent
-    level += 1
+    # Check if child counts match
+    if node1.child_count != node2.child_count:
+        return False
 
-print("\n" + "="*50)
-print("KEY TAKEAWAYS:")
-print("="*50)
+    # Recursively compare all children
+    for child1, child2 in zip(node1.children, node2.children):
+        if not nodes_equal(child1, child2, mask_params):
+            return False
+
+    return True
+
+print("\nNode comparison function defined ✓")
+
+print("\n" + "="*60)
+print("STEP 3: Define helper functions")
+print("="*60)
+
+def count_params_in_subtree(node):
+    """Count how many PARAMs are in a subtree"""
+    text = node.text.decode('utf8') if node.text else ""
+    count = 1 if text == 'PARAM' else 0
+
+    for child in node.children:
+        count += count_params_in_subtree(child)
+
+    return count
+
+def find_matching_subtrees(target_node, search_root):
+    """
+    Find all nodes in search_root that match target_node's structure
+    """
+    matches = []
+
+    def traverse(node):
+        if nodes_equal(target_node, node):
+            matches.append(node)
+
+        for child in node.children:
+            traverse(child)
+
+    traverse(search_root)
+    return matches
+
+print("\nHelper functions defined:")
+print("  - count_params_in_subtree()")
+print("  - find_matching_subtrees()")
+
+print("\n" + "="*60)
+print("STEP 4: Implement the matching algorithm")
+print("="*60)
+
+def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
+    """
+    Find the corresponding PARAM in snippet2 for a given PARAM in snippet1
+
+    Returns:
+        - matching PARAM node from snippet2 if found
+        - None if no match found
+    """
+    current_context = param_node
+    level = 0
+
+    print(f"\n  Starting from PARAM at line {param_node.start_point[0]+1}")
+
+    while current_context and level < max_levels:
+        print(f"\n  Level {level}: {current_context.type}")
+        print(f"    Text: {current_context.text.decode('utf8')[:50]}...")
+
+        # Count PARAMs in current context
+        params_in_context_1 = count_params_in_subtree(current_context)
+        print(f"    PARAMs in this subtree: {params_in_context_1}")
+
+        # Find matches in snippet1 (should be unique if we grew enough)
+        matches_in_snippet1 = find_matching_subtrees(current_context, snippet1_root)
+        print(f"    Matches in snippet 1: {len(matches_in_snippet1)}")
+
+        # Find matches in snippet2
+        matches_in_snippet2 = find_matching_subtrees(current_context, snippet2_root)
+        print(f"    Matches in snippet 2: {len(matches_in_snippet2)}")
+
+        # Check if we have unique match in both snippets
+        if len(matches_in_snippet1) == 1 and len(matches_in_snippet2) == 1:
+            # Check that both matches contain exactly one PARAM
+            params_in_match2 = count_params_in_subtree(matches_in_snippet2[0])
+
+            print("------------")
+            print(matches_in_snippet2)
+            print(matches_in_snippet1)
+
+            if params_in_context_1 == 1 and params_in_match2 == 1:
+                # Found it! Extract the PARAM from snippet2
+                def extract_param(node):
+                    text = node.text.decode('utf8') if node.text else ""
+                    if text == 'PARAM':
+                        return node
+                    for child in node.children:
+                        result = extract_param(child)
+                        if result:
+                            return result
+                    return None
+
+                matched_param = extract_param(matches_in_snippet2[0])
+                print(f"    ✓ FOUND MATCH!")
+                return matched_param
+            else:
+                print(f"    Not unique enough (contains {params_in_context_1} PARAMs)")
+
+        elif len(matches_in_snippet2) == 0:
+            print(f"    ✗ No match in snippet 2 - this PARAM has no counterpart")
+            return None
+
+        else:
+            print(f"    Ambiguous - need to grow context")
+
+        # Grow the context
+        current_context = current_context.parent
+        level += 1
+
+    # If we reached max levels without finding a match
+    print(f"    ✗ Reached max levels without unique match")
+    return None
+
+print("\nMatching algorithm defined ✓")
+
+print("\n" + "="*60)
+print("STEP 5: Match each PARAM from snippet 1 to snippet 2")
+print("="*60)
+
+matches = {}
+
+for i, param1 in enumerate(params1):
+    print(f"\n{'='*60}")
+    print(f"Processing PARAM {i+1} from snippet 1:")
+    print(f"{'='*60}")
+
+    matched_param = match_param(param1, tree1.root_node, tree2.root_node)
+
+    if matched_param:
+        matches[i] = matched_param
+        # Find its index in params2
+        match_index = params2.index(matched_param) if matched_param in params2 else -1
+        print(f"\n✓ RESULT: Matched to PARAM {match_index+1} in snippet 2")
+    else:
+        print(f"\n✗ RESULT: No match found")
+
+print("\n" + "="*60)
+print("FINAL RESULTS:")
+print("="*60)
+
+print("\nPARAM Mapping (Snippet 1 → Snippet 2):")
+for i in range(len(params1)):
+    if i in matches:
+        match_index = params2.index(matches[i])
+        context1 = params1[i].parent.text.decode('utf8')
+        context2 = params2[match_index].parent.text.decode('utf8')
+        print(f"  PARAM {i+1} → PARAM {match_index+1}")
+        print(f"    Context 1: {context1}")
+        print(f"    Context 2: {context2}")
+    else:
+        context1 = params1[i].parent.text.decode('utf8')
+        print(f"  PARAM {i+1} → NO MATCH")
+        print(f"    Context 1: {context1}")
+
+print("\n" + "="*60)
+print("INTERPRETATION:")
+print("="*60)
 print("""
-1. Manual traversal: Simple but you control everything
-2. Queries: More powerful, but need to filter results
-3. Context: Use .parent to grow subtrees upward
-4. S-expression: str(node) gives you the structure
-5. Every node has: type, text, parent, children, start_point, end_point
+- PARAM 1 (b * PARAM) → PARAM 1 (b * PARAM): ✓ Same variable 'b'
+- PARAM 2 (c * PARAM) → NO MATCH: ✗ Different variable ('c' vs 'd')
+- PARAM 3 (first in PARAM + PARAM) → PARAM 3 (same position)
+- PARAM 4 (second in PARAM + PARAM) → PARAM 4 (same position)
+- PARAM 5 (return PARAM) → PARAM 5 (return PARAM): ✓ Same context
 """)
