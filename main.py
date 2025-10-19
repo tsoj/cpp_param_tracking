@@ -174,6 +174,22 @@ print("STEP 4: Implement the matching algorithm")
 print("=" * 60)
 
 
+def get_params_in_subtree(node):
+    """Get all PARAM nodes in a subtree, in order"""
+    params = []
+
+    def traverse(n):
+        text = n.text.decode("utf8") if n.text else ""
+        if text == "PARAM":
+            params.append(n)
+
+        for child in n.children:
+            traverse(child)
+
+    traverse(node)
+    return params
+
+
 def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
     """
     Find the corresponding PARAM in snippet2 for a given PARAM in snippet1
@@ -192,8 +208,8 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
         print(f"    Text: {current_context.text.decode('utf8')[:50]}...")
 
         # Count PARAMs in current context
-        params_in_context_1 = count_params_in_subtree(current_context)
-        print(f"    PARAMs in this subtree: {params_in_context_1}")
+        params_in_context = get_params_in_subtree(current_context)
+        print(f"    PARAMs in this subtree: {len(params_in_context)}")
 
         # Find matches in snippet1 (should be unique if we grew enough)
         matches_in_snippet1 = find_matching_subtrees(current_context, snippet1_root)
@@ -205,30 +221,36 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
 
         # Check if we have unique match in both snippets
         if len(matches_in_snippet1) == 1 and len(matches_in_snippet2) == 1:
-            # Check that both matches contain exactly one PARAM
-            params_in_match2 = count_params_in_subtree(matches_in_snippet2[0])
+            # We have unique matching subtrees!
+            # Find PARAMs in both subtrees
+            params_in_match1 = get_params_in_subtree(matches_in_snippet1[0])
+            params_in_match2 = get_params_in_subtree(matches_in_snippet2[0])
 
-            print("------------")
-            print(matches_in_snippet2)
-            print(matches_in_snippet1)
+            print(f"    Unique match found!")
+            print(f"    PARAMs in match 1: {len(params_in_match1)}")
+            print(f"    PARAMs in match 2: {len(params_in_match2)}")
 
-            if params_in_context_1 == 1 and params_in_match2 == 1:
-                # Found it! Extract the PARAM from snippet2
-                def extract_param(node):
-                    text = node.text.decode("utf8") if node.text else ""
-                    if text == "PARAM":
-                        return node
-                    for child in node.children:
-                        result = extract_param(child)
-                        if result:
-                            return result
-                    return None
+            # Check that both have the same number of PARAMs
+            if len(params_in_match1) != len(params_in_match2):
+                print(f"    ✗ Different number of PARAMs in matched subtrees!")
+                return None
 
-                matched_param = extract_param(matches_in_snippet2[0])
-                print(f"    ✓ FOUND MATCH!")
+            # Find the position of our param_node in the match1 PARAMs
+            try:
+                param_index = params_in_match1.index(param_node)
+                print(
+                    f"    Our PARAM is at position {param_index} in the matched subtree"
+                )
+
+                # Return the PARAM at the same position in match2
+                matched_param = params_in_match2[param_index]
+                print(f"    ✓ FOUND MATCH by position!")
                 return matched_param
-            else:
-                print(f"    Not unique enough (contains {params_in_context_1} PARAMs)")
+            except ValueError:
+                print(
+                    f"    ✗ Our PARAM not found in matched subtree (shouldn't happen)"
+                )
+                return None
 
         elif len(matches_in_snippet2) == 0:
             print(f"    ✗ No match in snippet 2 - this PARAM has no counterpart")
