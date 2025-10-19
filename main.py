@@ -29,23 +29,24 @@ int main() {
 }
 """
 
-print("="*60)
+print("=" * 60)
 print("CODE SNIPPET 1:")
-print("="*60)
+print("=" * 60)
 print(cpp_snippet_1)
 
-print("="*60)
+print("=" * 60)
 print("CODE SNIPPET 2:")
-print("="*60)
+print("=" * 60)
 print(cpp_snippet_2)
 
 # Parse both snippets
 tree1 = parser.parse(bytes(cpp_snippet_1, "utf8"))
 tree2 = parser.parse(bytes(cpp_snippet_2, "utf8"))
 
-print("="*60)
+print("=" * 60)
 print("STEP 1: Find all PARAMs in both snippets")
-print("="*60)
+print("=" * 60)
+
 
 def find_params(root):
     """Find all PARAM nodes using a query"""
@@ -56,26 +57,28 @@ def find_params(root):
     params = []
     for capture_name, nodes in captures.items():
         for node in nodes:
-            if node.text.decode('utf8') == 'PARAM':
+            if node.text.decode("utf8") == "PARAM":
                 params.append(node)
     return params
+
 
 params1 = find_params(tree1.root_node)
 params2 = find_params(tree2.root_node)
 
 print(f"\nSnippet 1: Found {len(params1)} PARAMs")
 for i, param in enumerate(params1):
-    context = param.parent.text.decode('utf8') if param.parent else "?"
-    print(f"  PARAM {i+1}: line {param.start_point[0]+1}, context: {context}")
+    context = param.parent.text.decode("utf8") if param.parent else "?"
+    print(f"  PARAM {i + 1}: line {param.start_point[0] + 1}, context: {context}")
 
 print(f"\nSnippet 2: Found {len(params2)} PARAMs")
 for i, param in enumerate(params2):
-    context = param.parent.text.decode('utf8') if param.parent else "?"
-    print(f"  PARAM {i+1}: line {param.start_point[0]+1}, context: {context}")
+    context = param.parent.text.decode("utf8") if param.parent else "?"
+    print(f"  PARAM {i + 1}: line {param.start_point[0] + 1}, context: {context}")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("STEP 2: Define node comparison function")
-print("="*60)
+print("=" * 60)
+
 
 def nodes_equal(node1, node2, mask_params=True):
     """
@@ -91,16 +94,21 @@ def nodes_equal(node1, node2, mask_params=True):
 
     # For leaf nodes, compare text
     if node1.child_count == 0 and node2.child_count == 0:
-        text1 = node1.text.decode('utf8') if node1.text else ""
-        text2 = node2.text.decode('utf8') if node2.text else ""
+        text1 = node1.text.decode("utf8") if node1.text else ""
+        text2 = node2.text.decode("utf8") if node2.text else ""
 
         # If masking PARAMs, treat all PARAMs as equal
-        if mask_params and text1 == 'PARAM' and text2 == 'PARAM':
+        if mask_params and text1 == "PARAM" and text2 == "PARAM":
             return True
 
         # For identifiers and literals, text must match
-        if node1.type in ['identifier', 'number_literal', 'string_literal',
-                          'primitive_type', 'type_identifier']:
+        if node1.type in [
+            "identifier",
+            "number_literal",
+            "string_literal",
+            "primitive_type",
+            "type_identifier",
+        ]:
             return text1 == text2
 
         # For other leaf nodes (operators, keywords), type match is enough
@@ -121,21 +129,24 @@ def nodes_equal(node1, node2, mask_params=True):
 
     return True
 
+
 print("\nNode comparison function defined ✓")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("STEP 3: Define helper functions")
-print("="*60)
+print("=" * 60)
+
 
 def count_params_in_subtree(node):
     """Count how many PARAMs are in a subtree"""
-    text = node.text.decode('utf8') if node.text else ""
-    count = 1 if text == 'PARAM' else 0
+    text = node.text.decode("utf8") if node.text else ""
+    count = 1 if text == "PARAM" else 0
 
     for child in node.children:
         count += count_params_in_subtree(child)
 
     return count
+
 
 def find_matching_subtrees(target_node, search_root):
     """
@@ -153,13 +164,15 @@ def find_matching_subtrees(target_node, search_root):
     traverse(search_root)
     return matches
 
+
 print("\nHelper functions defined:")
 print("  - count_params_in_subtree()")
 print("  - find_matching_subtrees()")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("STEP 4: Implement the matching algorithm")
-print("="*60)
+print("=" * 60)
+
 
 def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
     """
@@ -172,7 +185,7 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
     current_context = param_node
     level = 0
 
-    print(f"\n  Starting from PARAM at line {param_node.start_point[0]+1}")
+    print(f"\n  Starting from PARAM at line {param_node.start_point[0] + 1}")
 
     while current_context and level < max_levels:
         print(f"\n  Level {level}: {current_context.type}")
@@ -202,8 +215,8 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
             if params_in_context_1 == 1 and params_in_match2 == 1:
                 # Found it! Extract the PARAM from snippet2
                 def extract_param(node):
-                    text = node.text.decode('utf8') if node.text else ""
-                    if text == 'PARAM':
+                    text = node.text.decode("utf8") if node.text else ""
+                    if text == "PARAM":
                         return node
                     for child in node.children:
                         result = extract_param(child)
@@ -232,18 +245,19 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
     print(f"    ✗ Reached max levels without unique match")
     return None
 
+
 print("\nMatching algorithm defined ✓")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("STEP 5: Match each PARAM from snippet 1 to snippet 2")
-print("="*60)
+print("=" * 60)
 
 matches = {}
 
 for i, param1 in enumerate(params1):
-    print(f"\n{'='*60}")
-    print(f"Processing PARAM {i+1} from snippet 1:")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print(f"Processing PARAM {i + 1} from snippet 1:")
+    print(f"{'=' * 60}")
 
     matched_param = match_param(param1, tree1.root_node, tree2.root_node)
 
@@ -251,31 +265,31 @@ for i, param1 in enumerate(params1):
         matches[i] = matched_param
         # Find its index in params2
         match_index = params2.index(matched_param) if matched_param in params2 else -1
-        print(f"\n✓ RESULT: Matched to PARAM {match_index+1} in snippet 2")
+        print(f"\n✓ RESULT: Matched to PARAM {match_index + 1} in snippet 2")
     else:
         print(f"\n✗ RESULT: No match found")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("FINAL RESULTS:")
-print("="*60)
+print("=" * 60)
 
 print("\nPARAM Mapping (Snippet 1 → Snippet 2):")
 for i in range(len(params1)):
     if i in matches:
         match_index = params2.index(matches[i])
-        context1 = params1[i].parent.text.decode('utf8')
-        context2 = params2[match_index].parent.text.decode('utf8')
-        print(f"  PARAM {i+1} → PARAM {match_index+1}")
+        context1 = params1[i].parent.text.decode("utf8")
+        context2 = params2[match_index].parent.text.decode("utf8")
+        print(f"  PARAM {i + 1} → PARAM {match_index + 1}")
         print(f"    Context 1: {context1}")
         print(f"    Context 2: {context2}")
     else:
-        context1 = params1[i].parent.text.decode('utf8')
-        print(f"  PARAM {i+1} → NO MATCH")
+        context1 = params1[i].parent.text.decode("utf8")
+        print(f"  PARAM {i + 1} → NO MATCH")
         print(f"    Context 1: {context1}")
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("INTERPRETATION:")
-print("="*60)
+print("=" * 60)
 print("""
 - PARAM 1 (b * PARAM) → PARAM 1 (b * PARAM): ✓ Same variable 'b'
 - PARAM 2 (c * PARAM) → NO MATCH: ✗ Different variable ('c' vs 'd')
