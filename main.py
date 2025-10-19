@@ -1,107 +1,159 @@
 """
-Step 1: Basic Tree-sitter C++ Parser
-This script demonstrates how to parse C++ code and print the AST
+Step 2: Finding Specific Nodes
+This script demonstrates how to find all PARAMs in C++ code
 """
 
-from tree_sitter import Language, Parser
+from tree_sitter import Language, Parser, Query
 import tree_sitter_cpp as tscpp
 
-# Step 1: Create a parser
-print("Step 1: Creating parser...")
+# Setup parser
 CPP_LANGUAGE = Language(tscpp.language())
 parser = Parser(CPP_LANGUAGE)
 
-# Step 3: Define some C++ code to parse
+# C++ code with PARAM placeholders (simulating anonymized parameters)
 cpp_code = """
 int main() {
-    int x = 5 * 3;
-    float y = x + 2.5;
-    return 0;
+    int x = PARAM * PARAM;
+    float y = x + PARAM;
+    int z = PARAM;
+    return PARAM;
 }
 """
 
-print("\n" + "="*50)
 print("Parsing this C++ code:")
 print("="*50)
 print(cpp_code)
 print("="*50)
 
-# Step 4: Parse the code
-# tree-sitter expects bytes, not strings
-print("\nStep 4: Parsing...")
+# Parse the code
 tree = parser.parse(bytes(cpp_code, "utf8"))
-
-# Step 5: Get the root node
 root_node = tree.root_node
 
-print("\nStep 5: Getting root node...")
-print(f"Root node type: {root_node.type}")
-print(f"Root node has {root_node.child_count} children")
-
-# Step 6: Print the S-expression (tree structure)
 print("\n" + "="*50)
-print("Full S-expression (AST structure):")
-print("="*50)
-print(str(root_node))
-
-# Step 7: Let's walk through the tree manually
-print("\n" + "="*50)
-print("Walking through the tree:")
+print("METHOD 1: Manual traversal to find PARAMs")
 print("="*50)
 
-def print_tree(node, indent=0):
-    """Recursively print the tree structure"""
-    # Print current node
-    indent_str = "  " * indent
-    node_text = node.text.decode('utf8') if node.text else ""
+def find_params_manual(node, params_list):
+    """Recursively find all PARAM nodes"""
+    # Check if this node's text is "PARAM"
+    if node.text and node.text.decode('utf8') == 'PARAM':
+        params_list.append(node)
 
-    # Truncate long text for readability
-    if len(node_text) > 50:
-        node_text = node_text[:50] + "..."
-
-    # Replace newlines with space for display
-    node_text = node_text.replace('\n', ' ')
-
-    print(f"{indent_str}{node.type}", end="")
-    if node_text:
-        print(f' "{node_text}"', end="")
-
-    # Show if it's a named node
-    if not node.is_named:
-        print(" [anonymous]", end="")
-
-    print()  # newline
-
-    # Print children
+    # Recurse into children
     for child in node.children:
-        print_tree(child, indent + 1)
+        find_params_manual(child, params_list)
 
-print_tree(root_node)
+params_manual = []
+find_params_manual(root_node, params_manual)
 
-# Step 8: Let's examine a specific interesting node
+print(f"\nFound {len(params_manual)} PARAMs using manual traversal:")
+for i, param in enumerate(params_manual):
+    print(f"\n  PARAM #{i+1}:")
+    print(f"    Type: {param.type}")
+    print(f"    Text: {param.text.decode('utf8')}")
+    print(f"    Position: line {param.start_point[0] + 1}, column {param.start_point[1]}")
+    print(f"    Parent type: {param.parent.type if param.parent else 'None'}")
+
 print("\n" + "="*50)
-print("Examining specific nodes:")
+print("METHOD 2: Using tree-sitter queries")
 print("="*50)
 
-# Find the function definition
-function_def = root_node.children[0]  # Should be function_definition
-print(f"\nFirst child type: {function_def.type}")
-print(f"First child text: {function_def.text.decode('utf8')[:100]}...")
+# Create a query to find identifiers
+# In tree-sitter, PARAM will be parsed as an identifier
+query_string = """
+(identifier) @param
+"""
 
-# Get the function body
-body = None
-for child in function_def.children:
-    if child.type == "compound_statement":
-        body = child
-        break
+print(f"Query pattern: {query_string.strip()}")
 
-if body:
-    print(f"\nFunction body type: {body.type}")
-    print(f"Function body has {body.child_count} children")
+# Compile the query
+query = Query(CPP_LANGUAGE, query_string)
 
-    # Look at statements in the body
-    print("\nStatements in function body:")
-    for i, child in enumerate(body.children):
-        if child.is_named:  # Skip braces
-            print(f"  Statement {i}: {child.type}")
-            print(f"    Text: {child.text.decode('utf8')}")
+# Execute the query
+captures = query.captures(root_node)
+
+print(f"\nFound {len(captures)} identifier captures")
+
+# Filter to only actual PARAMs
+params_query = []
+
+for capture_name, nodes in captures.items():
+    print(f"Capture: {capture_name}")
+    for node in nodes:
+        if node.text.decode('utf8') == 'PARAM':
+            params_query.append(node)
+
+print(f"Filtered to {len(params_query)} actual PARAMs:")
+for i, param in enumerate(params_query):
+    print(f"\n  PARAM #{i+1}:")
+    print(f"    Capture name: @param")
+    print(f"    Type: {param.type}")
+    print(f"    Text: {param.text.decode('utf8')}")
+
+print("\n" + "="*50)
+print("METHOD 3: Understanding node context")
+print("="*50)
+
+# Let's look at the context around each PARAM
+for i, param in enumerate(params_manual):
+    print(f"\nPARAM #{i+1} context:")
+    print(f"  Node type: {param.type}")
+
+    # Look at parent
+    if param.parent:
+        print(f"  Parent type: {param.parent.type}")
+        print(f"  Parent text: {param.parent.text.decode('utf8')}")
+
+    # Look at grandparent
+    if param.parent and param.parent.parent:
+        print(f"  Grandparent type: {param.parent.parent.type}")
+
+    # Look at siblings
+    if param.parent:
+        siblings = param.parent.children
+        param_index = siblings.index(param)
+        print(f"  Position among siblings: {param_index} of {len(siblings)}")
+
+        print(f"  Siblings:")
+        for j, sibling in enumerate(siblings):
+            marker = " <-- THIS PARAM" if sibling == param else ""
+            sib_text = sibling.text.decode('utf8').replace('\n', ' ')[:30]
+            print(f"    [{j}] {sibling.type}: \"{sib_text}\"{marker}")
+
+print("\n" + "="*50)
+print("METHOD 4: Getting context subtrees")
+print("="*50)
+
+# For each PARAM, show progressively larger contexts
+param = params_manual[0]  # Let's focus on the first PARAM: "PARAM * PARAM"
+
+print(f"Analyzing first PARAM: {param.text.decode('utf8')}")
+print(f"Position: line {param.start_point[0] + 1}, column {param.start_point[1]}")
+
+# Show growing context
+current = param
+level = 0
+while current and level < 5:
+    print(f"\nContext level {level} ({current.type}):")
+    print(f"  Text: {current.text.decode('utf8')}")
+    print(f"  S-expression:")
+    # Show indented S-expression
+    sexp_lines = str(current).split('\n')
+    for line in sexp_lines[:10]:  # Limit lines for readability
+        print(f"    {line}")
+    if len(sexp_lines) > 10:
+        print(f"    ... ({len(sexp_lines) - 10} more lines)")
+
+    current = current.parent
+    level += 1
+
+print("\n" + "="*50)
+print("KEY TAKEAWAYS:")
+print("="*50)
+print("""
+1. Manual traversal: Simple but you control everything
+2. Queries: More powerful, but need to filter results
+3. Context: Use .parent to grow subtrees upward
+4. S-expression: str(node) gives you the structure
+5. Every node has: type, text, parent, children, start_point, end_point
+""")
