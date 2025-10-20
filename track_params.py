@@ -126,8 +126,46 @@ def extract_numbers_and_create_param_code(
     return param_code, number_values
 
 
+def is_valid_parameter_change(old_value: str, new_value: str) -> bool:
+    """
+    Check if a parameter change is valid based on:
+    - Absolute change <= 2 (for integers)
+    - OR relative change <= 20%
+
+    Returns True if the change is acceptable, False otherwise.
+    """
+    try:
+        # Try to parse as float to handle both int and float
+        old_num = float(old_value)
+        new_num = float(new_value)
+
+        # Check if both are integers (no decimal point in original strings)
+        is_integer = "." not in old_value and "." not in new_value
+
+        if is_integer:
+            # For integers, check absolute difference
+            abs_diff = abs(new_num - old_num)
+            if abs_diff <= 2:
+                return True
+
+        # Check relative change (for all numeric types)
+        if old_num != 0:
+            relative_change = abs((new_num - old_num) / old_num)
+            if relative_change <= 0.20:  # 20%
+                return True
+
+        return False
+    except (ValueError, ZeroDivisionError):
+        # If we can't parse as numbers, reject the match
+        return False
+
+
 def track_parameters(
-    file_path: str, start_line: int, end_line: int, max_commits: int, verbose: bool = False
+    file_path: str,
+    start_line: int,
+    end_line: int,
+    max_commits: int,
+    verbose: bool = False,
 ) -> Tuple:
     """Track parameter changes across git history using tree-based matching."""
 
@@ -180,74 +218,98 @@ def track_parameters(
 
     # Track through history
     for commit_idx, commit in enumerate(commits[1:], 1):  # Skip first commit (HEAD)
-        print(f"\n{'='*80}")
-        print(f"COMMIT {commit_idx}/{len(commits)-1}: {commit[:8]}")
-        print(f"{'='*80}")
-        
+        print(f"\n{'=' * 80}")
+        print(f"COMMIT {commit_idx}/{len(commits) - 1}: {commit[:8]}")
+        print(f"{'=' * 80}")
+
         commit_code = get_file_lines(file_path, start_line, end_line, str(commit))
         if not commit_code:
             print(f"  File or lines don't exist at this commit, stopping tracking")
             break
-        
+
         # Show the commit code
         print(f"\nCode in this commit:")
         print("-" * 80)
         print(commit_code)
         print("-" * 80)
-        
+
         # Extract numbers and create PARAM version for commit
-        commit_param_code, commit_numbers = extract_numbers_and_create_param_code(commit_code)
+        commit_param_code, commit_numbers = extract_numbers_and_create_param_code(
+            commit_code
+        )
         commit_tree = parser.parse(bytes(commit_param_code, "utf8"))
         commit_params = find_params(commit_tree.root_node)
-        
+
         print(f"\nFound {len(commit_params)} parameters in commit version")
         print(f"Commit parameter values: {[n[0] for n in commit_numbers]}")
-        
+
         # Match each original PARAM to commit PARAM
         matched_count = 0
         param_matches = {}  # Store matches for display
-        
+
         for orig_param_node in original_params:
             param_id = param_map[id(orig_param_node)]
-            
+
             # Use the sophisticated matching algorithm from main.py
             matched_param = match_param(
                 orig_param_node,
                 original_tree.root_node,
                 commit_tree.root_node,
                 max_levels=10,
-                verbose=verbose
+                verbose=verbose,
             )
-            
+
             if matched_param:
                 # Find the index of matched param in commit_params
                 try:
                     commit_param_idx = commit_params.index(matched_param)
                     if commit_param_idx < len(commit_numbers):
-                        value = commit_numbers[commit_param_idx][0]
-                        param_history[param_id].append(value)
-                        param_matches[param_id] = value
-                        matched_count += 1
+                        new_value = commit_numbers[commit_param_idx][0]
+
+                        # Get the previous value (most recent in history)
+                        old_value = param_history[param_id][-1]
+
+                        # Validate the change
+                        if is_valid_parameter_change(old_value, new_value):
+                            param_history[param_id].append(new_value)
+                            param_matches[param_id] = new_value
+                            matched_count += 1
+                        else:
+                            param_matches[param_id] = (
+                                f"REJECTED: change too large ({old_value} -> {new_value})"
+                            )
+                            if verbose:
+                                print(
+                                    f"  {param_id}: Rejected match due to large change: {old_value} -> {new_value}"
+                                )
                     else:
                         print(f"  Warning: {param_id} matched but index out of range")
                         param_matches[param_id] = "ERROR: index out of range"
                 except ValueError:
-                    print(f"  Warning: {param_id} matched param not in commit_params list")
+                    print(
+                        f"  Warning: {param_id} matched param not in commit_params list"
+                    )
                     param_matches[param_id] = "ERROR: not in list"
             else:
                 param_matches[param_id] = "NOT MATCHED"
-        
+
         # Display matching results
         print(f"\nParameter Matching Results:")
         print("-" * 80)
-        for param_id in sorted(param_matches.keys(), key=lambda x: int(x.split('_')[1])):
+        for param_id in sorted(
+            param_matches.keys(), key=lambda x: int(x.split("_")[1])
+        ):
             match_result = param_matches[param_id]
             if match_result == "NOT MATCHED":
                 print(f"  {param_id}: ✗ NOT MATCHED")
+            elif isinstance(match_result, str) and match_result.startswith("REJECTED"):
+                print(f"  {param_id}: ✗ {match_result}")
             else:
                 print(f"  {param_id}: ✓ matched to value {match_result}")
-        
-        print(f"\nSummary: Successfully matched {matched_count}/{len(original_params)} parameters")
+
+        print(
+            f"\nSummary: Successfully matched {matched_count}/{len(original_params)} parameters"
+        )
 
     return (
         original_code,
