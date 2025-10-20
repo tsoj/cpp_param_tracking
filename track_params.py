@@ -30,11 +30,15 @@ def get_file_lines(
     except subprocess.CalledProcessError:
         return ""
 
-
 def get_git_log_range(
     file_path: str, start_line: int, end_line: int, max_commits: int
-) -> List[str]:
-    """Get git log for a specific line range."""
+) -> List[Tuple[str, int, int]]:
+    """
+    Get git log for a specific line range, tracking how line numbers change.
+    
+    Returns:
+        List of (commit_hash, start_line, end_line) tuples
+    """
     try:
         result = subprocess.run(
             [
@@ -49,30 +53,56 @@ def get_git_log_range(
             check=True,
         )
 
-        commits = []
+        commits_with_ranges = []
         lines = result.stdout.split("\n")
         current_commit = None
-
-        for line in lines:
-            if (
-                line
-                and not line.startswith("diff")
-                and not line.startswith("---")
-                and not line.startswith("+++")
-                and not line.startswith("@@")
-                and not line.startswith("+")
-                and not line.startswith("-")
-                and not line.startswith(" ")
-            ):
+        current_start = start_line
+        current_end = end_line
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            # Check if this is a commit hash line
+            if line and not any(line.startswith(prefix) for prefix in 
+                               ["diff", "---", "+++", "@@", "+", "-", " ", "\\", "index"]):
                 # This is a commit hash
                 current_commit = line.strip()
                 if current_commit:
-                    commits.append(current_commit)
-
-        return commits
+                    commits_with_ranges.append((current_commit, current_start, current_end))
+            
+            # Check for @@ markers to track line range changes
+            elif line.startswith("@@"):
+                # Parse the hunk header: @@ -old_start,old_count +new_start,new_count @@
+                # The +new_start,new_count tells us where the lines are in this commit
+                import re
+                match = re.search(r'@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
+                if match:
+                    new_start = int(match.group(1))
+                    new_count = int(match.group(2)) if match.group(2) else 1
+                    
+                    # Update the range for the next (older) commit
+                    # We read forward to see how many context/removed lines there are
+                    context_and_removed = 0
+                    j = i + 1
+                    while j < len(lines) and not lines[j].startswith("@@") and not lines[j].startswith("diff"):
+                        if lines[j].startswith(" ") or lines[j].startswith("-"):
+                            context_and_removed += 1
+                        j += 1
+                    
+                    # For the previous commit, the lines are at the + position
+                    current_start = new_start
+                    current_end = new_start + new_count - 1
+            
+            i += 1
+        
+        return commits_with_ranges
     except subprocess.CalledProcessError as e:
         print(f"Error getting git log: {e}")
         return []
+
+
+
 
 
 def extract_numbers_and_create_param_code(
@@ -166,7 +196,7 @@ def track_parameters(
     end_line: int,
     max_commits: int,
     verbose: bool = False,
-) -> Tuple:
+):
     """Track parameter changes across git history using tree-based matching."""
 
     # Get the original snippet from HEAD
@@ -193,15 +223,15 @@ def track_parameters(
             f"Warning: Number of PARAMs ({len(original_params)}) doesn't match extracted numbers ({len(original_numbers)})"
         )
 
-    # Get git history
-    commits = get_git_log_range(file_path, start_line, end_line, max_commits)
+    # Get git history with adjusted line ranges
+    commits_with_ranges = get_git_log_range(file_path, start_line, end_line, max_commits)
 
-    if not commits:
+    if not commits_with_ranges:
         print("No commits found in history")
         return None
 
     print(
-        f"Tracking {len(commits)} commits with {len(original_params)} parameters...\n"
+        f"Tracking {len(commits_with_ranges)} commits with {len(original_params)} parameters...\n"
     )
 
     # Initialize parameter tracking
@@ -217,12 +247,13 @@ def track_parameters(
         param_history[param_id] = [value]  # Start with HEAD value
 
     # Track through history
-    for commit_idx, commit in enumerate(commits[1:], 1):  # Skip first commit (HEAD)
+    for commit_idx, (commit, commit_start, commit_end) in enumerate(commits_with_ranges[1:], 1):  # Skip first commit (HEAD)
         print(f"\n{'=' * 80}")
-        print(f"COMMIT {commit_idx}/{len(commits) - 1}: {commit[:8]}")
+        print(f"COMMIT {commit_idx}/{len(commits_with_ranges) - 1}: {commit[:8]}")
+        print(f"  Lines: {commit_start}-{commit_end} (adjusted for this commit)")
         print(f"{'=' * 80}")
 
-        commit_code = get_file_lines(file_path, start_line, end_line, str(commit))
+        commit_code = get_file_lines(file_path, commit_start, commit_end, str(commit))
         if not commit_code:
             print(f"  File or lines don't exist at this commit, stopping tracking")
             break
@@ -324,8 +355,8 @@ def track_parameters(
 def create_annotated_code(
     original_code: str,
     original_numbers: List[Tuple[str, int, int]],
-    param_map: Dict,
-    original_params: List,
+    param_map,
+    original_params,
 ) -> str:
     """Create version of code with parameters replaced by identifiers."""
     # Sort by position (reverse order for replacement to maintain byte positions)
