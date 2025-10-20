@@ -361,6 +361,11 @@ def main():
     parser.add_argument(
         "--verbose", action="store_true", help="Show detailed matching debug output"
     )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Show all parameters including those that don't change",
+    )
 
     args = parser.parse_args()
 
@@ -378,9 +383,49 @@ def main():
             param_history,
         ) = result
 
-        # Create annotated version
+        # Filter parameters by default (unless --show-all is specified)
+        if not args.show_all:
+            # Only keep parameters that have more than one unique value
+            param_history_filtered = {
+                param_id: values
+                for param_id, values in param_history.items()
+                if len(set(values)) > 1
+            }
+
+            # Update param_map to only include filtered parameters
+            param_map_filtered = {
+                node_id: param_id
+                for node_id, param_id in param_map.items()
+                if param_id in param_history_filtered
+            }
+
+            # Update original_params and original_numbers to match
+            filtered_indices = [
+                idx
+                for idx, (param_node, _) in enumerate(
+                    zip(original_params, original_numbers)
+                )
+                if param_map[id(param_node)] in param_history_filtered
+            ]
+            original_params_filtered = [original_params[i] for i in filtered_indices]
+            original_numbers_filtered = [original_numbers[i] for i in filtered_indices]
+
+            display_param_history = param_history_filtered
+            display_param_map = param_map_filtered
+            display_original_params = original_params_filtered
+            display_original_numbers = original_numbers_filtered
+        else:
+            display_param_history = param_history
+            display_param_map = param_map
+            display_original_params = original_params
+            display_original_numbers = original_numbers
+
+        # Create annotated version (only with displayed parameters)
         annotated = create_annotated_code(
-            original_code, original_numbers, param_map, original_params
+            original_code,
+            display_original_numbers,
+            display_param_map,
+            display_original_params,
         )
 
         print("\n" + "=" * 80)
@@ -390,18 +435,24 @@ def main():
         print()
 
         print("=" * 80)
-        print("ANNOTATED CODE (parameters replaced with identifiers):")
+        if args.show_all:
+            print("ANNOTATED CODE (parameters replaced with identifiers):")
+        else:
+            print("ANNOTATED CODE (only changed parameters shown):")
         print("=" * 80)
         print(annotated)
         print()
 
         print("=" * 80)
-        print("PARAMETER HISTORY (newest to oldest):")
+        if args.show_all:
+            print("PARAMETER HISTORY (newest to oldest):")
+        else:
+            print("PARAMETER HISTORY (only changed parameters, newest to oldest):")
         print("=" * 80)
         for param_id in sorted(
-            param_history.keys(), key=lambda x: int(x.split("_")[1])
+            display_param_history.keys(), key=lambda x: int(x.split("_")[1])
         ):
-            values = param_history[param_id]
+            values = display_param_history[param_id]
             print(f"{param_id}: {values}")
         print()
 
