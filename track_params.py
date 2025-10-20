@@ -5,10 +5,12 @@ Track numeric parameter changes in C++ code across git history.
 
 import argparse
 import subprocess
-import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from tree_sitter import Language, Parser
 import tree_sitter_cpp as tscpp
+
+# Import matching functions from main.py
+from main import find_params, match_param
 
 
 def get_file_lines(
@@ -26,12 +28,12 @@ def get_file_lines(
         # Git line numbers are 1-indexed
         return "\n".join(lines[start_line - 1 : end_line])
     except subprocess.CalledProcessError:
-        return None
+        return ""
 
 
 def get_git_log_range(
     file_path: str, start_line: int, end_line: int, max_commits: int
-) -> List[Tuple[str, str]]:
+) -> List[str]:
     """Get git log for a specific line range."""
     try:
         result = subprocess.run(
@@ -73,19 +75,26 @@ def get_git_log_range(
         return []
 
 
-def parse_cpp_code(code: str) -> List[Dict]:
-    """Parse C++ code and extract statements with their numeric literals."""
+def extract_numbers_and_create_param_code(
+    code: str,
+) -> Tuple[str, List[Tuple[str, int, int]]]:
+    """
+    Extract numeric literals from code and replace them with PARAM identifiers.
+
+    Returns:
+        - Code with numbers replaced by PARAM
+        - List of (original_value, start_byte, end_byte) tuples in order
+    """
     CPP_LANGUAGE = Language(tscpp.language())
     parser = Parser(CPP_LANGUAGE)
 
     tree = parser.parse(bytes(code, "utf8"))
 
-    statements = []
+    # Find all numeric literals
+    numbers = []
 
     def extract_numbers_from_node(node):
         """Extract all numeric literals from a node and its children."""
-        numbers = []
-
         if node.type in ("number_literal", "integer_literal", "float_literal"):
             numbers.append(
                 {
@@ -96,80 +105,31 @@ def parse_cpp_code(code: str) -> List[Dict]:
             )
 
         for child in node.children:
-            numbers.extend(extract_numbers_from_node(child))
+            extract_numbers_from_node(child)
 
-        return numbers
+    extract_numbers_from_node(tree.root_node)
 
-    def get_statement_nodes(node):
-        """Get top-level statement nodes."""
-        statement_types = {
-            "expression_statement",
-            "return_statement",
-            "declaration",
-            "if_statement",
-            "while_statement",
-            "for_statement",
-            "compound_statement",
-            "function_definition",
-        }
+    # Sort by position (reverse order for replacement)
+    numbers.sort(key=lambda x: x["start"], reverse=True)
 
-        result = []
+    # Replace numbers with PARAM
+    code_bytes = code.encode("utf8")
+    for num in numbers:
+        code_bytes = code_bytes[: num["start"]] + b"PARAM" + code_bytes[num["end"] :]
 
-        if node.type in statement_types:
-            result.append(node)
-        else:
-            for child in node.children:
-                result.extend(get_statement_nodes(child))
+    param_code = code_bytes.decode("utf8")
 
-        return result
+    # Return in forward order for tracking
+    numbers.reverse()
+    number_values = [(n["value"], n["start"], n["end"]) for n in numbers]
 
-    statement_nodes = get_statement_nodes(tree.root_node)
-
-    for stmt_node in statement_nodes:
-        stmt_text = stmt_node.text.decode("utf8")
-        numbers = extract_numbers_from_node(stmt_node)
-
-        # Sort numbers by position
-        numbers.sort(key=lambda x: x["start"])
-
-        statements.append(
-            {
-                "text": stmt_text,
-                "numbers": [n["value"] for n in numbers],
-                "node": stmt_node,
-            }
-        )
-
-    return statements
-
-
-def normalize_code(code: str) -> str:
-    """Normalize code by collapsing whitespace and replacing numbers with placeholder."""
-    # Replace all numbers with a placeholder
-    normalized = re.sub(r"\b\d+\.?\d*[fFlLuU]?\b", "NUM", code)
-    # Collapse whitespace
-    normalized = re.sub(r"\s+", " ", normalized)
-    return normalized.strip()
-
-
-def match_statement(target_stmt: Dict, candidate_stmts: List[Dict]) -> Optional[Dict]:
-    """Try to match a target statement against candidates."""
-    target_normalized = normalize_code(target_stmt["text"])
-
-    for candidate in candidate_stmts:
-        candidate_normalized = normalize_code(candidate["text"])
-        if target_normalized == candidate_normalized:
-            # Check if they have the same number of numeric literals
-            if len(target_stmt["numbers"]) == len(candidate["numbers"]):
-                return candidate
-
-    return None
+    return param_code, number_values
 
 
 def track_parameters(
-    file_path: str, start_line: int, end_line: int, max_commits: int
-) -> Dict:
-    """Track parameter changes across git history."""
+    file_path: str, start_line: int, end_line: int, max_commits: int, verbose: bool = False
+) -> Tuple:
+    """Track parameter changes across git history using tree-based matching."""
 
     # Get the original snippet from HEAD
     original_code = get_file_lines(file_path, start_line, end_line, "HEAD")
@@ -177,8 +137,23 @@ def track_parameters(
         print(f"Error: Could not read lines {start_line}-{end_line} from {file_path}")
         return None
 
-    # Parse the original code
-    original_statements = parse_cpp_code(original_code)
+    # Extract numbers and create PARAM version
+    original_param_code, original_numbers = extract_numbers_and_create_param_code(
+        original_code
+    )
+
+    # Parse the PARAM version
+    CPP_LANGUAGE = Language(tscpp.language())
+    parser = Parser(CPP_LANGUAGE)
+    original_tree = parser.parse(bytes(original_param_code, "utf8"))
+
+    # Find all PARAM nodes in original code
+    original_params = find_params(original_tree.root_node)
+
+    if len(original_params) != len(original_numbers):
+        print(
+            f"Warning: Number of PARAMs ({len(original_params)}) doesn't match extracted numbers ({len(original_numbers)})"
+        )
 
     # Get git history
     commits = get_git_log_range(file_path, start_line, end_line, max_commits)
@@ -187,97 +162,124 @@ def track_parameters(
         print("No commits found in history")
         return None
 
-    print(f"Tracking {len(commits)} commits...\n")
+    print(
+        f"Tracking {len(commits)} commits with {len(original_params)} parameters...\n"
+    )
 
     # Initialize parameter tracking
     param_history = {}
-    param_counter = 0
-    param_map = {}  # Maps (statement_idx, param_idx) to PARAM_N identifier
+    param_map = {}  # Maps PARAM node id to PARAM_N identifier
 
-    # Process each statement in the original code
-    for stmt_idx, stmt in enumerate(original_statements):
-        for param_idx, param_value in enumerate(stmt["numbers"]):
-            key = (stmt_idx, param_idx)
-            param_id = f"PARAM_{param_counter}"
-            param_counter += 1
-            param_map[key] = param_id
-            param_history[param_id] = [param_value]  # Start with HEAD value
+    # Create initial mapping
+    for idx, (param_node, (value, _, _)) in enumerate(
+        zip(original_params, original_numbers)
+    ):
+        param_id = f"PARAM_{idx}"
+        param_map[id(param_node)] = param_id
+        param_history[param_id] = [value]  # Start with HEAD value
 
     # Track through history
-    for commit in commits[1:]:  # Skip first commit (HEAD)
-        commit_code = get_file_lines(file_path, start_line, end_line, commit)
+    for commit_idx, commit in enumerate(commits[1:], 1):  # Skip first commit (HEAD)
+        print(f"\n{'='*80}")
+        print(f"COMMIT {commit_idx}/{len(commits)-1}: {commit[:8]}")
+        print(f"{'='*80}")
+        
+        commit_code = get_file_lines(file_path, start_line, end_line, str(commit))
         if not commit_code:
-            # File or lines don't exist at this commit, stop tracking
+            print(f"  File or lines don't exist at this commit, stopping tracking")
             break
-
-        commit_statements = parse_cpp_code(commit_code)
-
-        # Try to match each original statement
-        for stmt_idx, orig_stmt in enumerate(original_statements):
-            matched = match_statement(orig_stmt, commit_statements)
-
-            if matched:
-                # Add parameter values to history
-                for param_idx, param_value in enumerate(matched["numbers"]):
-                    key = (stmt_idx, param_idx)
-                    if key in param_map:
-                        param_id = param_map[key]
-                        param_history[param_id].append(param_value)
+        
+        # Show the commit code
+        print(f"\nCode in this commit:")
+        print("-" * 80)
+        print(commit_code)
+        print("-" * 80)
+        
+        # Extract numbers and create PARAM version for commit
+        commit_param_code, commit_numbers = extract_numbers_and_create_param_code(commit_code)
+        commit_tree = parser.parse(bytes(commit_param_code, "utf8"))
+        commit_params = find_params(commit_tree.root_node)
+        
+        print(f"\nFound {len(commit_params)} parameters in commit version")
+        print(f"Commit parameter values: {[n[0] for n in commit_numbers]}")
+        
+        # Match each original PARAM to commit PARAM
+        matched_count = 0
+        param_matches = {}  # Store matches for display
+        
+        for orig_param_node in original_params:
+            param_id = param_map[id(orig_param_node)]
+            
+            # Use the sophisticated matching algorithm from main.py
+            matched_param = match_param(
+                orig_param_node,
+                original_tree.root_node,
+                commit_tree.root_node,
+                max_levels=10,
+                verbose=verbose
+            )
+            
+            if matched_param:
+                # Find the index of matched param in commit_params
+                try:
+                    commit_param_idx = commit_params.index(matched_param)
+                    if commit_param_idx < len(commit_numbers):
+                        value = commit_numbers[commit_param_idx][0]
+                        param_history[param_id].append(value)
+                        param_matches[param_id] = value
+                        matched_count += 1
+                    else:
+                        print(f"  Warning: {param_id} matched but index out of range")
+                        param_matches[param_id] = "ERROR: index out of range"
+                except ValueError:
+                    print(f"  Warning: {param_id} matched param not in commit_params list")
+                    param_matches[param_id] = "ERROR: not in list"
             else:
-                # Statement not found, stop tracking its parameters
-                for param_idx in range(len(orig_stmt["numbers"])):
-                    key = (stmt_idx, param_idx)
-                    if key in param_map:
-                        param_id = param_map[key]
-                        # Mark as not found (could append None, but we'll just stop)
-                        pass
+                param_matches[param_id] = "NOT MATCHED"
+        
+        # Display matching results
+        print(f"\nParameter Matching Results:")
+        print("-" * 80)
+        for param_id in sorted(param_matches.keys(), key=lambda x: int(x.split('_')[1])):
+            match_result = param_matches[param_id]
+            if match_result == "NOT MATCHED":
+                print(f"  {param_id}: ✗ NOT MATCHED")
+            else:
+                print(f"  {param_id}: ✓ matched to value {match_result}")
+        
+        print(f"\nSummary: Successfully matched {matched_count}/{len(original_params)} parameters")
 
-    return original_code, original_statements, param_map, param_history
+    return (
+        original_code,
+        original_param_code,
+        original_params,
+        original_numbers,
+        param_map,
+        param_history,
+    )
 
 
 def create_annotated_code(
-    original_code: str, statements: List[Dict], param_map: Dict
+    original_code: str,
+    original_numbers: List[Tuple[str, int, int]],
+    param_map: Dict,
+    original_params: List,
 ) -> str:
     """Create version of code with parameters replaced by identifiers."""
-    annotated = original_code
-
-    # We need to replace numbers in reverse order to maintain positions
+    # Sort by position (reverse order for replacement to maintain byte positions)
     replacements = []
+    for param_node, (value, start, end) in zip(original_params, original_numbers):
+        param_id = param_map[id(param_node)]
+        replacements.append((start, end, value, param_id))
 
-    for stmt_idx, stmt in enumerate(statements):
-        stmt_text = stmt["text"]
-        for param_idx, number in enumerate(stmt["numbers"]):
-            key = (stmt_idx, param_idx)
-            if key in param_map:
-                param_id = param_map[key]
-                replacements.append((stmt_text, number, param_id))
+    replacements.sort(key=lambda x: x[0], reverse=True)
 
-    # Build annotated version by processing each statement
-    for stmt_idx, stmt in enumerate(statements):
-        stmt_text = stmt["text"]
-        annotated_stmt = stmt_text
+    # Replace numbers with PARAM_N identifiers
+    code_bytes = original_code.encode("utf8")
+    for start, end, value, param_id in replacements:
+        code_bytes = code_bytes[:start] + param_id.encode("utf8") + code_bytes[end:]
 
-        # Replace numbers in reverse order to maintain positions
-        offset = 0
-        for param_idx, number in enumerate(stmt["numbers"]):
-            key = (stmt_idx, param_idx)
-            if key in param_map:
-                param_id = param_map[key]
-                # Find the number in the statement
-                pattern = r"\b" + re.escape(number) + r"\b"
-                match = re.search(pattern, annotated_stmt[offset:])
-                if match:
-                    pos = offset + match.start()
-                    annotated_stmt = (
-                        annotated_stmt[:pos]
-                        + param_id
-                        + annotated_stmt[pos + len(number) :]
-                    )
-                    offset = pos + len(param_id)
-
-        annotated = annotated.replace(stmt_text, annotated_stmt, 1)
-
-    return annotated
+    return code_bytes.decode("utf8")
 
 
 def main():
@@ -294,18 +296,36 @@ def main():
     parser.add_argument(
         "--max-commits", type=int, default=10, help="Maximum number of commits to track"
     )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Show detailed matching debug output"
+    )
 
     args = parser.parse_args()
 
     result = track_parameters(
-        args.file, args.start_line, args.end_line, args.max_commits
+        args.file, args.start_line, args.end_line, args.max_commits, args.verbose
     )
 
     if result:
-        original_code, statements, param_map, param_history = result
+        (
+            original_code,
+            original_param_code,
+            original_params,
+            original_numbers,
+            param_map,
+            param_history,
+        ) = result
 
         # Create annotated version
-        annotated = create_annotated_code(original_code, statements, param_map)
+        annotated = create_annotated_code(
+            original_code, original_numbers, param_map, original_params
+        )
+
+        print("\n" + "=" * 80)
+        print("ORIGINAL CODE:")
+        print("=" * 80)
+        print(original_code)
+        print()
 
         print("=" * 80)
         print("ANNOTATED CODE (parameters replaced with identifiers):")

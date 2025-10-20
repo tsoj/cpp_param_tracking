@@ -183,9 +183,16 @@ def has_binary_operator_or_bounded_context(node):
     return traverse(node)
 
 
-def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
+def match_param(param_node, snippet1_root, snippet2_root, max_levels=10, verbose=False):
     """
     Find the corresponding PARAM in snippet2 for a given PARAM in snippet1
+
+    Args:
+        param_node: The PARAM node to match
+        snippet1_root: Root of the first snippet's AST
+        snippet2_root: Root of the second snippet's AST
+        max_levels: Maximum context levels to try
+        verbose: If True, print debug information
 
     Returns:
         - matching PARAM node from snippet2 if found
@@ -196,37 +203,43 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
 
     # First, increase the initial level until we include at least one binary operator
     # or reach a bounded context (like a statement)
-    print(f"\n  Starting from PARAM at line {param_node.start_point[0] + 1}")
-    print(f"  Growing context to include a binary operator or bounded context...")
+    if verbose:
+        print(f"\n  Starting from PARAM at line {param_node.start_point[0] + 1}")
+        print(f"  Growing context to include a binary operator or bounded context...")
 
     while current_context and not has_binary_operator_or_bounded_context(current_context):
-        print(f"    Level {level}: {current_context.type} (growing...)")
+        if verbose:
+            print(f"    Level {level}: {current_context.type} (growing...)")
         current_context = current_context.parent
         level += 1
         if level >= max_levels:
-            print(f"    ✗ Reached max levels without finding suitable context")
+            if verbose:
+                print(f"    ✗ Reached max levels without finding suitable context")
             return None
 
-    if current_context:
+    if verbose and current_context:
         print(f"    Found suitable context at level {level}: {current_context.type}")
-
-    print(f"\n  Starting matching from level {level}")
+        print(f"\n  Starting matching from level {level}")
 
     while current_context and level < max_levels:
-        print(f"\n  Level {level}: {current_context.type}")
-        print(f"    Text: {current_context.text.decode('utf8')[:50]}...")
+        if verbose:
+            print(f"\n  Level {level}: {current_context.type}")
+            print(f"    Text: {current_context.text.decode('utf8')[:50]}...")
 
         # Count PARAMs in current context
         params_in_context = get_params_in_subtree(current_context)
-        print(f"    PARAMs in this subtree: {len(params_in_context)}")
+        if verbose:
+            print(f"    PARAMs in this subtree: {len(params_in_context)}")
 
         # Find matches in snippet1 (should be unique if we grew enough)
         matches_in_snippet1 = find_matching_subtrees(current_context, snippet1_root)
-        print(f"    Matches in snippet 1: {len(matches_in_snippet1)}")
+        if verbose:
+            print(f"    Matches in snippet 1: {len(matches_in_snippet1)}")
 
         # Find matches in snippet2
         matches_in_snippet2 = find_matching_subtrees(current_context, snippet2_root)
-        print(f"    Matches in snippet 2: {len(matches_in_snippet2)}")
+        if verbose:
+            print(f"    Matches in snippet 2: {len(matches_in_snippet2)}")
 
         # Check if we have unique match in both snippets
         if len(matches_in_snippet1) == 1 and len(matches_in_snippet2) == 1:
@@ -235,43 +248,51 @@ def match_param(param_node, snippet1_root, snippet2_root, max_levels=10):
             params_in_match1 = get_params_in_subtree(matches_in_snippet1[0])
             params_in_match2 = get_params_in_subtree(matches_in_snippet2[0])
 
-            print(f"    Unique match found!")
-            print(f"    PARAMs in match 1: {len(params_in_match1)}")
-            print(f"    PARAMs in match 2: {len(params_in_match2)}")
+            if verbose:
+                print(f"    Unique match found!")
+                print(f"    PARAMs in match 1: {len(params_in_match1)}")
+                print(f"    PARAMs in match 2: {len(params_in_match2)}")
 
             # Check that both have the same number of PARAMs
             if len(params_in_match1) != len(params_in_match2):
-                print(f"    ✗ Different number of PARAMs in matched subtrees!")
+                if verbose:
+                    print(f"    ✗ Different number of PARAMs in matched subtrees!")
                 return None
 
             # Find the position of our param_node in the match1 PARAMs
             try:
                 param_index = params_in_match1.index(param_node)
-                print(
-                    f"    Our PARAM is at position {param_index} in the matched subtree"
-                )
+                if verbose:
+                    print(
+                        f"    Our PARAM is at position {param_index} in the matched subtree"
+                    )
 
                 # Return the PARAM at the same position in match2
                 matched_param = params_in_match2[param_index]
-                print(f"    ✓ FOUND MATCH by position!")
+                if verbose:
+                    print(f"    ✓ FOUND MATCH by position!")
                 return matched_param
             except ValueError:
-                print(
-                    f"    ✗ Our PARAM not found in matched subtree (shouldn't happen)"
-                )
+                if verbose:
+                    print(
+                        f"    ✗ Our PARAM not found in matched subtree (shouldn't happen)"
+                    )
                 return None
 
         elif len(matches_in_snippet2) == 0:
-            print(f"    ✗ No match in snippet 2 - this PARAM has no counterpart")
+            if verbose:
+                print(f"    ✗ No match in snippet 2 - this PARAM has no counterpart")
             return None
 
         else:
-            print(f"    Ambiguous - need to grow context")
+            if verbose:
+                print(f"    Ambiguous - need to grow context")
 
         # Grow the context
         current_context = current_context.parent
         level += 1
 
     # If we reached max levels without finding a match
-    print(f"    ✗ Reached max levels without unique match")
+    if verbose:
+        print(f"    ✗ Reached max levels without unique match")
     return None
