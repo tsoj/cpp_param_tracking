@@ -1,27 +1,31 @@
-"""
-Comprehensive test suite for main.py - PARAM matching algorithm
-"""
+"""Comprehensive test suite for the PARAM matching algorithm."""
+
+import sys
+from pathlib import Path
 
 import pytest
 from tree_sitter import Language, Parser, Query, Node
 import tree_sitter_cpp as tscpp
 
-# Import all functions from main.py
-from main import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from param_tracking import (
     CPP_LANGUAGE,
-    parser,
-    find_params,
-    nodes_equal,
     count_params_in_subtree,
     find_matching_subtrees,
+    find_params,
     get_params_in_subtree,
     match_param,
+    nodes_equal,
+    parse_code,
 )
 
 
 def parse_cpp(code):
     """Helper to parse C++ code"""
-    return parser.parse(bytes(code, "utf8"))
+    return parse_code(code)
 
 
 # ============================================================================
