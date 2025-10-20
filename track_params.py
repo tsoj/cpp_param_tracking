@@ -30,12 +30,93 @@ def get_file_lines(
     except subprocess.CalledProcessError:
         return ""
 
+def get_changed_lines_from_diff() -> Tuple[str, int, int]:
+    """
+    Parse git diff to automatically determine the changed file and line range.
+
+    Returns:
+        Tuple of (file_path, start_line, end_line)
+
+    Raises:
+        ValueError: If no changes found, multiple files changed, or cannot parse diff
+    """
+    try:
+        # Get the diff with line numbers
+        result = subprocess.run(
+            ["git", "diff", "HEAD", "--unified=0"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        diff_output = result.stdout
+        if not diff_output.strip():
+            raise ValueError("No changes found in git diff. Please commit or stage your changes first, or provide --file, --start-line, and --end-line explicitly.")
+
+        # Parse the diff output
+        files_changed = {}
+        current_file = None
+
+        for line in diff_output.split('\n'):
+            # Look for file headers
+            if line.startswith('--- a/'):
+                current_file = line[6:]  # Remove '--- a/' prefix
+            elif line.startswith('+++ b/'):
+                new_file = line[6:]  # Remove '+++ b/' prefix
+                if new_file != '/dev/null':
+                    current_file = new_file
+            # Look for hunk headers like @@ -10,5 +10,6 @@
+            elif line.startswith('@@') and current_file:
+                # Extract the new file line numbers (the second pair)
+                parts = line.split('@@')[1].strip().split()
+                if len(parts) >= 2:
+                    # Parse +start,count format
+                    new_range = parts[1] if parts[1].startswith('+') else parts[0]
+                    if new_range.startswith('+'):
+                        new_range = new_range[1:]  # Remove '+' prefix
+
+                        if ',' in new_range:
+                            start, count = map(int, new_range.split(','))
+                            end = start + count - 1
+                        else:
+                            # Single line change
+                            start = int(new_range)
+                            end = start
+
+                        if current_file not in files_changed:
+                            files_changed[current_file] = []
+                        files_changed[current_file].append((start, end))
+
+        if not files_changed:
+            raise ValueError("Could not parse any changes from git diff. Please provide --file, --start-line, and --end-line explicitly.")
+
+        if len(files_changed) > 1:
+            file_list = ', '.join(files_changed.keys())
+            raise ValueError(f"Multiple files changed: {file_list}. Please provide --file, --start-line, and --end-line explicitly to specify which file to analyze.")
+
+        # Get the single file and its changes
+        file_path = list(files_changed.keys())[0]
+        line_ranges = files_changed[file_path]
+
+        if not line_ranges:
+            raise ValueError(f"No line changes found in {file_path}")
+
+        # Merge all line ranges into a single range (min start to max end)
+        min_start = min(start for start, _ in line_ranges)
+        max_end = max(end for _, end in line_ranges)
+
+        return file_path, min_start, max_end
+
+    except subprocess.CalledProcessError as e:
+        raise ValueError(f"Failed to run git diff: {e}")
+
+
 def get_git_log_range(
     file_path: str, start_line: int, end_line: int, max_commits: int
 ) -> List[Tuple[str, int, int]]:
     """
     Get git log for a specific line range, tracking how line numbers change.
-    
+
     Returns:
         List of (commit_hash, start_line, end_line) tuples
     """
@@ -58,19 +139,19 @@ def get_git_log_range(
         current_commit = None
         current_start = start_line
         current_end = end_line
-        
+
         i = 0
         while i < len(lines):
             line = lines[i]
-            
+
             # Check if this is a commit hash line
-            if line and not any(line.startswith(prefix) for prefix in 
+            if line and not any(line.startswith(prefix) for prefix in
                                ["diff", "---", "+++", "@@", "+", "-", " ", "\\", "index"]):
                 # This is a commit hash
                 current_commit = line.strip()
                 if current_commit:
                     commits_with_ranges.append((current_commit, current_start, current_end))
-            
+
             # Check for @@ markers to track line range changes
             elif line.startswith("@@"):
                 # Parse the hunk header: @@ -old_start,old_count +new_start,new_count @@
@@ -80,7 +161,7 @@ def get_git_log_range(
                 if match:
                     new_start = int(match.group(1))
                     new_count = int(match.group(2)) if match.group(2) else 1
-                    
+
                     # Update the range for the next (older) commit
                     # We read forward to see how many context/removed lines there are
                     context_and_removed = 0
@@ -89,13 +170,13 @@ def get_git_log_range(
                         if lines[j].startswith(" ") or lines[j].startswith("-"):
                             context_and_removed += 1
                         j += 1
-                    
+
                     # For the previous commit, the lines are at the + position
                     current_start = new_start
                     current_end = new_start + new_count - 1
-            
+
             i += 1
-        
+
         return commits_with_ranges
     except subprocess.CalledProcessError as e:
         print(f"Error getting git log: {e}")
@@ -379,12 +460,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Track numeric parameter changes in C++ code across git history"
     )
-    parser.add_argument("--file", required=True, help="Path to the C++ file")
+    parser.add_argument("--file", required=False, help="Path to the C++ file (auto-detected from git diff if not provided)")
     parser.add_argument(
-        "--start-line", type=int, required=True, help="Start line number (1-indexed)"
+        "--start-line", type=int, required=False, help="Start line number (1-indexed, auto-detected from git diff if not provided)"
     )
     parser.add_argument(
-        "--end-line", type=int, required=True, help="End line number (inclusive)"
+        "--end-line", type=int, required=False, help="End line number (inclusive, auto-detected from git diff if not provided)"
     )
     parser.add_argument(
         "--max-commits", type=int, default=10, help="Maximum number of commits to track"
@@ -400,8 +481,29 @@ def main():
 
     args = parser.parse_args()
 
+    # Auto-detect file and lines from git diff if not provided
+    file_path = args.file
+    start_line = args.start_line
+    end_line = args.end_line
+
+    # Check if all three are provided or none are provided
+    provided_args = [file_path is not None, start_line is not None, end_line is not None]
+    
+    if not any(provided_args):
+        # None provided - auto-detect from git diff
+        try:
+            file_path, start_line, end_line = get_changed_lines_from_diff()
+            print(f"Auto-detected from git diff: {file_path} lines {start_line}-{end_line}")
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
+    elif not all(provided_args):
+        # Some but not all provided - error
+        print("Error: Either provide all of --file, --start-line, and --end-line, or provide none of them to auto-detect from git diff.")
+        return
+
     result = track_parameters(
-        args.file, args.start_line, args.end_line, args.max_commits, args.verbose
+        file_path, start_line, end_line, args.max_commits, args.verbose
     )
 
     if result:
