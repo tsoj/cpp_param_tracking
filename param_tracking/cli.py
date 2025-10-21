@@ -21,6 +21,16 @@ PREPROCESSOR_COLOR = "\x1b[36m"
 DEFAULT_PARAM_COLOR = "\x1b[1;3m"
 DIM_SEPARATOR = "\x1b[2m-\x1b[0m"
 
+ANSI_COLOR_HEX = {
+    KEYWORD_COLOR: "#4c8bf5",
+    STRING_COLOR: "#d17aff",
+    NUMBER_COLOR: "#33c3c1",
+    COMMENT_COLOR: "#6f6f6f",
+    OPERATOR_COLOR: "#8c6a00",
+    PREPROCESSOR_COLOR: "#2aa1b3",
+    DEFAULT_PARAM_COLOR: "#333333",
+}
+
 CPP_KEYWORDS = {
     "alignas",
     "alignof",
@@ -145,6 +155,15 @@ class ParamColor:
     dim_ansi_code: str
 
 
+@dataclass
+class HighlightSegment:
+    text: str
+    ansi_code: str | None
+    hex_color: str | None
+    italic: bool = False
+    bold: bool = False
+
+
 def _rgb_to_ansi256(r: int, g: int, b: int) -> int:
     """Approximate an RGB color with an ANSI-256 color code."""
     if r == g == b:
@@ -188,20 +207,58 @@ def _assign_param_colors(param_ids: Iterable[str]) -> Dict[str, ParamColor]:
     return colors
 
 
-def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str:
-    """Render a simple syntax-highlighted version of *code* with colored PARAM identifiers."""
+def _syntax_highlight_segments(
+    code: str, param_colors: Dict[str, ParamColor]
+) -> List[HighlightSegment]:
+    """Return syntax-highlighted segments for *code*."""
     if not code:
-        return ""
+        return []
 
-    highlighted: List[str] = []
+    segments: List[HighlightSegment] = []
     length = len(code)
     index = 0
+
+    def _append(
+        text: str,
+        ansi: str | None = None,
+        hex_color: str | None = None,
+        *,
+        italic: bool = False,
+        bold: bool = False,
+    ) -> None:
+        if not text:
+            return
+        if (
+            segments
+            and segments[-1].ansi_code == ansi
+            and segments[-1].hex_color == hex_color
+            and segments[-1].italic == italic
+            and segments[-1].bold == bold
+        ):
+            last = segments[-1]
+            segments[-1] = HighlightSegment(
+                last.text + text,
+                ansi,
+                hex_color,
+                italic=italic,
+                bold=bold,
+            )
+            return
+        segments.append(
+            HighlightSegment(
+                text,
+                ansi,
+                hex_color,
+                italic=italic,
+                bold=bold,
+            )
+        )
 
     while index < length:
         char = code[index]
 
         if char == "\n":
-            highlighted.append("\n")
+            _append("\n")
             index += 1
             continue
 
@@ -209,8 +266,11 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
             line_end = code.find("\n", index)
             if line_end == -1:
                 line_end = length
-            highlighted.append(
-                f"{PREPROCESSOR_COLOR}{code[index:line_end]}{ANSI_RESET}"
+            text = code[index:line_end]
+            _append(
+                text,
+                PREPROCESSOR_COLOR,
+                ANSI_COLOR_HEX.get(PREPROCESSOR_COLOR),
             )
             index = line_end
             continue
@@ -219,7 +279,8 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
             line_end = code.find("\n", index)
             if line_end == -1:
                 line_end = length
-            highlighted.append(f"{COMMENT_COLOR}{code[index:line_end]}{ANSI_RESET}")
+            text = code[index:line_end]
+            _append(text, COMMENT_COLOR, ANSI_COLOR_HEX.get(COMMENT_COLOR))
             index = line_end
             continue
 
@@ -229,7 +290,8 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
                 end = length
             else:
                 end += 2
-            highlighted.append(f"{COMMENT_COLOR}{code[index:end]}{ANSI_RESET}")
+            text = code[index:end]
+            _append(text, COMMENT_COLOR, ANSI_COLOR_HEX.get(COMMENT_COLOR))
             index = end
             continue
 
@@ -246,14 +308,15 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
                 j += 1
             else:
                 j = length
-            highlighted.append(f"{STRING_COLOR}{code[index:j]}{ANSI_RESET}")
+            text = code[index:j]
+            _append(text, STRING_COLOR, ANSI_COLOR_HEX.get(STRING_COLOR))
             index = j
             continue
 
         match = NUMBER_RE.match(code, index)
         if match:
             text = match.group()
-            highlighted.append(f"{NUMBER_COLOR}{text}{ANSI_RESET}")
+            _append(text, NUMBER_COLOR, ANSI_COLOR_HEX.get(NUMBER_COLOR))
             index = match.end()
             continue
 
@@ -261,8 +324,13 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
         if match:
             text = match.group()
             color = param_colors.get(text)
-            ansi = color.identifier_ansi_code if color else DEFAULT_PARAM_COLOR
-            highlighted.append(f"{ansi}{text}{ANSI_RESET}")
+            if color:
+                ansi = color.identifier_ansi_code
+                hex_color = color.hex_value
+            else:
+                ansi = DEFAULT_PARAM_COLOR
+                hex_color = ANSI_COLOR_HEX.get(DEFAULT_PARAM_COLOR)
+            _append(text, ansi, hex_color, italic=True, bold=True)
             index = match.end()
             continue
 
@@ -270,30 +338,164 @@ def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str
         if match:
             text = match.group()
             if text in CPP_KEYWORDS:
-                highlighted.append(f"{KEYWORD_COLOR}{text}{ANSI_RESET}")
+                _append(text, KEYWORD_COLOR, ANSI_COLOR_HEX.get(KEYWORD_COLOR))
             else:
-                highlighted.append(text)
+                _append(text)
             index = match.end()
             continue
 
         match = OPERATOR_RE.match(code, index)
         if match:
             text = match.group()
-            highlighted.append(f"{OPERATOR_COLOR}{text}{ANSI_RESET}")
+            _append(text, OPERATOR_COLOR, ANSI_COLOR_HEX.get(OPERATOR_COLOR))
             index = match.end()
             continue
 
         match = WHITESPACE_RE.match(code, index)
         if match:
             text = match.group()
-            highlighted.append(text)
+            _append(text)
             index = match.end()
             continue
 
-        highlighted.append(char)
+        _append(char)
         index += 1
 
-    return "".join(highlighted)
+    return segments
+
+
+def _segments_to_ansi(segments: Sequence[HighlightSegment]) -> str:
+    if not segments:
+        return ""
+    parts: List[str] = []
+    for segment in segments:
+        if segment.ansi_code:
+            parts.append(f"{segment.ansi_code}{segment.text}{ANSI_RESET}")
+        else:
+            parts.append(segment.text)
+    return "".join(parts)
+
+
+def _syntax_highlight_cpp(code: str, param_colors: Dict[str, ParamColor]) -> str:
+    """Render syntax-highlighted ANSI string."""
+    return _segments_to_ansi(_syntax_highlight_segments(code, param_colors))
+
+
+def _draw_highlighted_text(
+    ax,
+    segments: Sequence[HighlightSegment],
+    *,
+    fontsize: int,
+) -> None:
+    """Render highlighted segments inside *ax* using renderer-measured metrics."""
+    ax.axis("off")
+
+    if not segments:
+        ax.text(
+            0.0,
+            1.0,
+            "(no code available)",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontfamily="monospace",
+            fontsize=fontsize,
+            color="#000000",
+        )
+        return
+
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bbox = ax.get_window_extent(renderer=renderer)
+    axis_width_points = max(bbox.width, 1.0)
+    axis_height_points = max(bbox.height, 1.0)
+
+    try:
+        from matplotlib.font_manager import FontProperties
+    except ImportError:  # pragma: no cover - matplotlib unavailable
+        FontProperties = None  # type: ignore[assignment]
+
+    if FontProperties is None:
+        approx_char_width = fontsize * 0.8
+        approx_line_height = fontsize * 1.45
+        current_x = 0.0
+        row = 0
+        top_offset = approx_line_height / axis_height_points * 0.3
+        for segment in segments:
+            portions = segment.text.split("\n")
+            for idx, part in enumerate(portions):
+                if part:
+                    x = current_x / axis_width_points
+                    y = (
+                        1.0
+                        - (row * approx_line_height) / axis_height_points
+                        - top_offset
+                    )
+                    ax.text(
+                        x,
+                        y,
+                        part,
+                        transform=ax.transAxes,
+                        ha="left",
+                        va="top",
+                        fontfamily="monospace",
+                        fontsize=fontsize,
+                        fontstyle="italic" if segment.italic else "normal",
+                        fontweight="bold" if segment.bold else "normal",
+                        color=segment.hex_color or "#000000",
+                        clip_on=True,
+                    )
+                    current_x += len(part) * approx_char_width
+                if idx < len(portions) - 1:
+                    row += 1
+                    current_x = 0.0
+        return
+
+    base_font = FontProperties(family="monospace", size=fontsize)
+    _, base_height, base_descent = renderer.get_text_width_height_descent(
+        "Ag", base_font, False
+    )
+    line_height_points = (base_height + base_descent) or (fontsize * 1.45)
+    line_height = line_height_points / axis_height_points
+    top_offset = line_height * 0.25
+
+    current_x_points = 0.0
+    row = 0
+
+    for segment in segments:
+        portions = segment.text.split("\n")
+        for idx, part in enumerate(portions):
+            if part:
+                font = FontProperties(
+                    family="monospace",
+                    size=fontsize,
+                    style="italic" if segment.italic else "normal",
+                    weight="bold" if segment.bold else "normal",
+                )
+                text_width_points, _, _ = renderer.get_text_width_height_descent(
+                    part, font, False
+                )
+                x = current_x_points / axis_width_points
+                y = 1.0 - row * line_height - top_offset
+                ax.text(
+                    x,
+                    y,
+                    part,
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontfamily="monospace",
+                    fontsize=fontsize,
+                    fontstyle="italic" if segment.italic else "normal",
+                    fontweight="bold" if segment.bold else "normal",
+                    color=segment.hex_color or "#000000",
+                    clip_on=True,
+                )
+                current_x_points += text_width_points
+            if idx < len(portions) - 1:
+                row += 1
+                current_x_points = 0.0
 
 
 def _format_history_sequence(values: List[str], color: ParamColor | None) -> str:
@@ -381,21 +583,24 @@ def _save_param_plots(
     param_order: Sequence[str],
     histories: Mapping[str, List[str]],
     param_colors: Dict[str, ParamColor],
+    syntax_segments: Sequence[HighlightSegment],
     output_path: Path | None = None,
 ) -> Path | None:
     try:
         import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
         from matplotlib.patches import FancyArrowPatch
     except ImportError:
         return None
 
     numeric_histories: Dict[str, List[float]] = {}
+    string_histories: Dict[str, List[str]] = {}
     for param_id in param_order:
-        values = histories.get(param_id)
-        if not values:
+        raw_values = histories.get(param_id)
+        if not raw_values:
             continue
         converted: List[float] = []
-        for value in values:
+        for value in raw_values:
             sanitized = value.replace("_", "").replace("'", "")
             if sanitized.lower().startswith("0x"):
                 try:
@@ -411,23 +616,58 @@ def _save_param_plots(
                 break
         if converted:
             numeric_histories[param_id] = list(reversed(converted))
+            string_histories[param_id] = list(reversed(raw_values))
 
     if not numeric_histories:
         return None
 
     count = len(numeric_histories)
-    cols = min(3, count)
+    cols = max(1, min(3, count))
     rows = math.ceil(count / cols)
-    figure_width = max(3, cols * 2)
-    figure_height = max(2, rows * 2)
-    fig, _ = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
-    axes_flat = fig.axes
+    syntax_plain = (
+        "".join(segment.text for segment in syntax_segments) if syntax_segments else ""
+    )
+    syntax_lines = syntax_plain.splitlines() or [""]
+    max_line_width = max(len(line) for line in syntax_lines)
+    text_font_size = 11
+    char_to_inches = text_font_size * 0.85 / 72.0
+    text_width_inches = max(5.0, max_line_width * char_to_inches + 1.0)
+    plot_width_inches = 2.6
+    plot_height_inches = 2.8
+    inner_width = text_width_inches + cols * plot_width_inches
+    text_height_inches = max(len(syntax_lines), 1) * (text_font_size * 1.45) / 72.0
+    inner_height = max(6.0, rows * plot_height_inches, text_height_inches + 0.8)
+    left_margin = 0.05
+    right_margin = 0.98
+    top_margin = 0.95
+    bottom_margin = 0.08
+    figure_width = inner_width / (right_margin - left_margin)
+    figure_height = inner_height / (top_margin - bottom_margin)
 
+    fig = plt.figure(figsize=(figure_width, figure_height))
+    grid = fig.add_gridspec(
+        rows,
+        cols + 1,
+        width_ratios=[text_width_inches] + [plot_width_inches] * cols,
+        wspace=0.5,
+        hspace=0.8,
+    )
+
+    syntax_ax = fig.add_subplot(grid[:, 0])
+    syntax_ax.set_title("Syntax Highlighted", fontsize=10, fontweight="bold", pad=6)
+    syntax_ax.axis("off")
+
+    plot_axes: List = []
     for index in range(rows * cols):
-        if index >= count:
-            axes_flat[index].axis("off")
+        row_index = index // cols
+        col_index = index % cols
+        ax = fig.add_subplot(grid[row_index, col_index + 1])
+        if index < count:
+            plot_axes.append(ax)
+        else:
+            ax.axis("off")
 
-    for ax, (param_id, values) in zip(axes_flat, numeric_histories.items()):
+    for ax, (param_id, values) in zip(plot_axes, numeric_histories.items()):
         x_values = list(range(len(values)))
         color = param_colors.get(param_id)
         hex_color = color.hex_value if color else "#000000"
@@ -473,44 +713,94 @@ def _save_param_plots(
                 ),
             )
 
-            x_left, x_right = ax.get_xlim()
-            y_bottom, y_top = ax.get_ylim()
-            x_span = x_right - x_left or 1.0
-            y_span = y_top - y_bottom or 1.0
-            x_right = max(x_right, arrow_tip_x + 0.8)
-            x_left = min(x_left, min(x_values) - 0.3)
-            y_bottom = min(y_bottom, arrow_tip_y, y_last) - y_span * 0.1
-            y_top = max(y_top, arrow_tip_y, y_last) + y_span * 0.1
-            ax.set_xlim(x_left, x_right + x_span * 0.05)
-            ax.set_ylim(y_bottom, y_top)
+            labels = string_histories.get(param_id)
+            if labels and len(labels) == len(values):
+                ax.annotate(
+                    labels[0],
+                    xy=(x_values[0], values[0]),
+                    xytext=(-6, 8),
+                    textcoords="offset points",
+                    fontsize=9,
+                    fontfamily="monospace",
+                    color="#000000",
+                    ha="right",
+                    va="bottom",
+                )
+                ax.annotate(
+                    labels[-1],
+                    xy=(x_last, y_last),
+                    xytext=(6, -10),
+                    textcoords="offset points",
+                    fontsize=9,
+                    fontfamily="monospace",
+                    color="#000000",
+                    ha="left",
+                    va="top",
+                )
 
-        ax.set_title(param_id, fontsize=9)
+            x_min = min(x_values[0], arrow_base_x) - 0.5
+            x_max = max(arrow_tip_x, x_last) + 0.8
+            y_min = min(min(values), arrow_tip_y)
+            y_max = max(max(values), arrow_tip_y)
+            y_pad = (y_max - y_min) * 0.2
+            if y_pad == 0:
+                y_pad = 0.5
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+        ax.set_title(param_id, fontsize=9, color=hex_color)
         ax.set_xticks([])
         ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set_visible(False)
         ax.set_facecolor("white")
 
-    fig.tight_layout(rect=(0, 0.08, 1, 1))
-    fig.text(
-        0.5,
-        0.055,
-        "Time (oldest \u2192 newest)",
-        ha="center",
-        va="center",
-        fontsize=11,
-        fontweight="bold",
+    fig.subplots_adjust(
+        left=left_margin,
+        right=right_margin,
+        top=top_margin,
+        bottom=bottom_margin,
     )
-    arrow = FancyArrowPatch(
-        (0.12, 0.035),
-        (0.88, 0.035),
-        transform=fig.transFigure,
-        arrowstyle="-|>",
-        mutation_scale=24,
-        linewidth=2.2,
-        color="#2c3e50",
-    )
-    fig.add_artist(arrow)
+    _draw_highlighted_text(syntax_ax, syntax_segments, fontsize=text_font_size)
+    if plot_axes:
+        syn_box = syntax_ax.get_position()
+        first_plot_box = plot_axes[0].get_position()
+        separator_x = (syn_box.x1 + first_plot_box.x0) / 2
+        separator = Line2D(
+            [separator_x, separator_x],
+            [bottom_margin, top_margin],
+            transform=fig.transFigure,
+            color="#d0d0d0",
+            linewidth=1.0,
+            alpha=0.9,
+        )
+        fig.add_artist(separator)
+
+        plot_left = min(ax.get_position().x0 for ax in plot_axes)
+        plot_right = max(ax.get_position().x1 for ax in plot_axes)
+        arrow_y = bottom_margin * 0.6
+        label_y = arrow_y + 0.015
+
+        fig.text(
+            (plot_left + plot_right) / 2,
+            label_y,
+            "Time (oldest \u2192 newest)",
+            ha="center",
+            va="bottom",
+            fontsize=11,
+            fontweight="bold",
+        )
+
+        arrow = FancyArrowPatch(
+            (plot_left + 0.01, arrow_y),
+            (plot_right - 0.01, arrow_y),
+            transform=fig.transFigure,
+            arrowstyle="-|>",
+            mutation_scale=24,
+            linewidth=2.2,
+            color="#2c3e50",
+        )
+        fig.add_artist(arrow)
     output = output_path or Path("param_history_plots.png")
     fig.savefig(output, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -575,7 +865,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     param_colors = _assign_param_colors(param_order)
     annotated = result.annotated_code(show_all=args.show_all)
-    plot_path = _save_param_plots(param_order, display_history, param_colors)
+    syntax_segments = _syntax_highlight_segments(annotated, param_colors)
+    plot_path = _save_param_plots(
+        param_order,
+        display_history,
+        param_colors,
+        syntax_segments,
+    )
 
     if args.verbose:
         print("\n" + "=" * 80)
@@ -610,7 +906,7 @@ def main(argv: list[str] | None = None) -> None:
     print("\n" + "=" * 80)
     print("SYNTAX HIGHLIGHTED SNIPPET")
     print("=" * 80)
-    print(_syntax_highlight_cpp(annotated, param_colors))
+    print(_segments_to_ansi(syntax_segments))
 
     print("\n" + "=" * 80)
     history_header = (

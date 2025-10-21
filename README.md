@@ -13,6 +13,8 @@ pip install tree-sitter tree-sitter-cpp pytest
 
 ## CLI
 
+The following command writes output to stdout and to `param_history_plots.png`.
+
 ```bash
 python track_params.py --file PATH --start-line N --end-line M
 ```
