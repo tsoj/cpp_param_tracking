@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
+from pathlib import Path
+from typing import Dict, Iterable, List, Mapping, Sequence
 
 from .tracking import CommitSnapshot, ParamMatch, auto_detect_range, track_parameters
 
@@ -375,6 +377,146 @@ def _print_commit(snapshot: CommitSnapshot, param_order: Iterable[str]) -> None:
     )
 
 
+def _save_param_plots(
+    param_order: Sequence[str],
+    histories: Mapping[str, List[str]],
+    param_colors: Dict[str, ParamColor],
+    output_path: Path | None = None,
+) -> Path | None:
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import FancyArrowPatch
+    except ImportError:
+        return None
+
+    numeric_histories: Dict[str, List[float]] = {}
+    for param_id in param_order:
+        values = histories.get(param_id)
+        if not values:
+            continue
+        converted: List[float] = []
+        for value in values:
+            sanitized = value.replace("_", "").replace("'", "")
+            if sanitized.lower().startswith("0x"):
+                try:
+                    converted.append(float(int(sanitized, 0)))
+                    continue
+                except ValueError:
+                    pass
+            sanitized = re.sub(r"[fFuUlL]+$", "", sanitized)
+            try:
+                converted.append(float(sanitized))
+            except ValueError:
+                converted = []
+                break
+        if converted:
+            numeric_histories[param_id] = list(reversed(converted))
+
+    if not numeric_histories:
+        return None
+
+    count = len(numeric_histories)
+    cols = min(3, count)
+    rows = math.ceil(count / cols)
+    figure_width = max(3, cols * 2)
+    figure_height = max(2, rows * 2)
+    fig, _ = plt.subplots(rows, cols, figsize=(figure_width, figure_height))
+    axes_flat = fig.axes
+
+    for index in range(rows * cols):
+        if index >= count:
+            axes_flat[index].axis("off")
+
+    for ax, (param_id, values) in zip(axes_flat, numeric_histories.items()):
+        x_values = list(range(len(values)))
+        color = param_colors.get(param_id)
+        hex_color = color.hex_value if color else "#000000"
+        ax.plot(x_values, values, color=hex_color, linewidth=1.4)
+
+        if values:
+            x_last = x_values[-1]
+            y_last = values[-1]
+            if len(values) >= 2:
+                x_prev = x_values[-2]
+                y_prev = values[-2]
+            else:
+                x_prev = x_last - 0.6
+                y_prev = y_last
+
+            dx = x_last - x_prev
+            dy = y_last - y_prev
+            if dx == dy == 0:
+                dx = 1.0
+                dy = 0.0
+
+            magnitude = math.hypot(dx, dy)
+            dir_x = dx / magnitude
+            dir_y = dy / magnitude
+            arrow_length = max(0.7, min(2.5, len(values) * 0.05 + 0.4))
+
+            arrow_tip_x = x_last + dir_x * arrow_length
+            arrow_tip_y = y_last + dir_y * arrow_length
+            arrow_base_x = x_last - dir_x * arrow_length * 0.3
+            arrow_base_y = y_last - dir_y * arrow_length * 0.3
+
+            ax.annotate(
+                "",
+                xy=(arrow_tip_x, arrow_tip_y),
+                xytext=(arrow_base_x, arrow_base_y),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color=hex_color,
+                    linewidth=1.4,
+                    shrinkA=0,
+                    shrinkB=0,
+                    mutation_scale=16,
+                ),
+            )
+
+            x_left, x_right = ax.get_xlim()
+            y_bottom, y_top = ax.get_ylim()
+            x_span = x_right - x_left or 1.0
+            y_span = y_top - y_bottom or 1.0
+            x_right = max(x_right, arrow_tip_x + 0.8)
+            x_left = min(x_left, min(x_values) - 0.3)
+            y_bottom = min(y_bottom, arrow_tip_y, y_last) - y_span * 0.1
+            y_top = max(y_top, arrow_tip_y, y_last) + y_span * 0.1
+            ax.set_xlim(x_left, x_right + x_span * 0.05)
+            ax.set_ylim(y_bottom, y_top)
+
+        ax.set_title(param_id, fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_facecolor("white")
+
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.text(
+        0.5,
+        0.055,
+        "Time (oldest \u2192 newest)",
+        ha="center",
+        va="center",
+        fontsize=11,
+        fontweight="bold",
+    )
+    arrow = FancyArrowPatch(
+        (0.12, 0.035),
+        (0.88, 0.035),
+        transform=fig.transFigure,
+        arrowstyle="-|>",
+        mutation_scale=24,
+        linewidth=2.2,
+        color="#2c3e50",
+    )
+    fig.add_artist(arrow)
+    output = output_path or Path("param_history_plots.png")
+    fig.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Track numeric parameter changes in C++ code across git history",
@@ -433,6 +575,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     param_colors = _assign_param_colors(param_order)
     annotated = result.annotated_code(show_all=args.show_all)
+    plot_path = _save_param_plots(param_order, display_history, param_colors)
 
     if args.verbose:
         print("\n" + "=" * 80)
@@ -452,6 +595,17 @@ def main(argv: list[str] | None = None) -> None:
 
         for snapshot in result.commits:
             _print_commit(snapshot, param_order)
+
+    print("\n" + "=" * 80)
+    print("PARAMETER HISTORY PLOTS")
+    print("=" * 80)
+    if plot_path:
+        print(f"Saved plot image to {plot_path} (x-axis: oldest \u2192 newest)")
+    else:
+        print(
+            "Unable to generate parameter plots "
+            "(requires matplotlib and numeric parameter histories)."
+        )
 
     print("\n" + "=" * 80)
     print("SYNTAX HIGHLIGHTED SNIPPET")
