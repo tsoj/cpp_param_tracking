@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
 
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyArrowPatch
+
 from .tracking import CommitSnapshot, ParamMatch, auto_detect_range, track_parameters
 
 ANSI_RESET = "\x1b[0m"
@@ -411,54 +416,13 @@ def _draw_highlighted_text(
     axis_width_points = max(bbox.width, 1.0)
     axis_height_points = max(bbox.height, 1.0)
 
-    try:
-        from matplotlib.font_manager import FontProperties
-    except ImportError:  # pragma: no cover - matplotlib unavailable
-        FontProperties = None  # type: ignore[assignment]
-
-    if FontProperties is None:
-        approx_char_width = fontsize * 0.8
-        approx_line_height = fontsize * 1.45
-        current_x = 0.0
-        row = 0
-        top_offset = approx_line_height / axis_height_points * 0.3
-        for segment in segments:
-            portions = segment.text.split("\n")
-            for idx, part in enumerate(portions):
-                if part:
-                    x = current_x / axis_width_points
-                    y = (
-                        1.0
-                        - (row * approx_line_height) / axis_height_points
-                        - top_offset
-                    )
-                    ax.text(
-                        x,
-                        y,
-                        part,
-                        transform=ax.transAxes,
-                        ha="left",
-                        va="top",
-                        fontfamily="monospace",
-                        fontsize=fontsize,
-                        fontstyle="italic" if segment.italic else "normal",
-                        fontweight="bold" if segment.bold else "normal",
-                        color=segment.hex_color or "#000000",
-                        clip_on=True,
-                    )
-                    current_x += len(part) * approx_char_width
-                if idx < len(portions) - 1:
-                    row += 1
-                    current_x = 0.0
-        return
-
     base_font = FontProperties(family="monospace", size=fontsize)
     _, base_height, base_descent = renderer.get_text_width_height_descent(
         "Ag", base_font, False
     )
     line_height_points = (base_height + base_descent) or (fontsize * 1.45)
     line_height = line_height_points / axis_height_points
-    top_offset = line_height * 0.25
+    top_offset = line_height * 0.3
 
     current_x_points = 0.0
     row = 0
@@ -586,13 +550,6 @@ def _save_param_plots(
     syntax_segments: Sequence[HighlightSegment],
     output_path: Path | None = None,
 ) -> Path | None:
-    try:
-        import matplotlib.pyplot as plt
-        from matplotlib.lines import Line2D
-        from matplotlib.patches import FancyArrowPatch
-    except ImportError:
-        return None
-
     numeric_histories: Dict[str, List[float]] = {}
     string_histories: Dict[str, List[str]] = {}
     for param_id in param_order:
@@ -629,8 +586,8 @@ def _save_param_plots(
     )
     syntax_lines = syntax_plain.splitlines() or [""]
     max_line_width = max(len(line) for line in syntax_lines)
-    text_font_size = 11
-    char_to_inches = text_font_size * 0.85 / 72.0
+    text_font_size = 12
+    char_to_inches = text_font_size * 0.85 / 78.0
     text_width_inches = max(5.0, max_line_width * char_to_inches + 1.0)
     plot_width_inches = 2.6
     plot_height_inches = 2.8
@@ -720,7 +677,7 @@ def _save_param_plots(
                     xy=(x_values[0], values[0]),
                     xytext=(-6, 8),
                     textcoords="offset points",
-                    fontsize=9,
+                    fontsize=11,
                     fontfamily="monospace",
                     color="#000000",
                     ha="right",
@@ -731,7 +688,7 @@ def _save_param_plots(
                     xy=(x_last, y_last),
                     xytext=(6, -10),
                     textcoords="offset points",
-                    fontsize=9,
+                    fontsize=11,
                     fontfamily="monospace",
                     color="#000000",
                     ha="left",
@@ -748,7 +705,7 @@ def _save_param_plots(
             ax.set_xlim(x_min, x_max)
             ax.set_ylim(y_min - y_pad, y_max + y_pad)
 
-        ax.set_title(param_id, fontsize=9, color=hex_color)
+        ax.set_title(param_id, fontsize=11, color=hex_color)
         ax.set_xticks([])
         ax.set_yticks([])
         for spine in ax.spines.values():
